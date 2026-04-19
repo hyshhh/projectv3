@@ -30,7 +30,7 @@ SYSTEM_PROMPT = """你是船弦号识别助手。严格按以下流程工作：
    → 直接调用 retrieve_by_description，用用户的描述作为查询
 
 3. 语义检索结果解读：
-   → 有结果：返回「根据描述检索到最相似的船：弦号 {hull_number}，描述：{description}（相似度：{score}）」
+   → 有结果：逐条列出所有返回的匹配结果，格式「{序号}. 弦号 {hull_number}，描述：{description}（相似度：{score}）」
    → 无结果：返回「未找到匹配的船只信息」
 
 【禁止】
@@ -66,10 +66,10 @@ FEW_SHOT_EXAMPLES = [
         }}
     ]),
     ToolMessage(
-        content='{"results": [{"hull_number": "0123", "description": "白色邮轮，船身有红蓝条纹装饰，三座烟囱", "score": 0.9234}]}',
+        content='{"results": [{"hull_number": "0123", "description": "白色邮轮，船身有红蓝条纹装饰，三座烟囱", "score": 0.9234}, {"hull_number": "0014", "description": "白色大型客轮，上层建筑为蓝色涂装，船尾有直升机停机坪", "score": 0.7521}, {"hull_number": "0789", "description": "白色科考船，船尾有A型吊架，甲板有多个实验室舱", "score": 0.6103}]}',
         tool_call_id="call_3",
     ),
-    AIMessage(content="未找到对应弦号，根据描述检索到最相似的船：弦号 0123，描述：白色邮轮，船身有红蓝条纹装饰，三座烟囱（相似度：0.9234）"),
+    AIMessage(content="未找到对应弦号，根据描述检索到以下匹配结果：\n1. 弦号 0123，描述：白色邮轮，船身有红蓝条纹装饰，三座烟囱（相似度：0.9234）\n2. 弦号 0014，描述：白色大型客轮，上层建筑为蓝色涂装，船尾有直升机停机坪（相似度：0.7521）\n3. 弦号 0789，描述：白色科考船，船尾有A型吊架，甲板有多个实验室舱（相似度：0.6103）"),
 ]
 
 
