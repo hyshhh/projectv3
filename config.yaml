@@ -14,6 +14,7 @@ embed:
   model: "text-embedding-v4"
   api_key: "your-embed-api-key"
   base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  dimensions: 1024
 
 # RAG 检索参数
 retrieval:

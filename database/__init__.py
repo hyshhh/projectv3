@@ -36,7 +36,7 @@ HASH_FILE_NAME = ".db_hash"
 class DashScopeEmbeddings(Embeddings):
     """DashScope Embedding 封装，直接调用 OpenAI 兼容模式 API。"""
 
-    def __init__(self, model: str, api_key: str, base_url: str):
+    def __init__(self, model: str, api_key: str, base_url: str, dimensions: int = 1024):
         if not api_key or api_key.startswith("your-"):
             raise ValueError(
                 "Embedding API Key 未配置。请在 config.yaml 中设置 embed.api_key，"
@@ -44,6 +44,7 @@ class DashScopeEmbeddings(Embeddings):
             )
         self.model = model
         self.api_key = api_key
+        self.dimensions = dimensions
         self._url = f"{base_url.rstrip('/')}/embeddings"
         self._headers = {
             "Authorization": f"Bearer {api_key}",
@@ -62,7 +63,7 @@ class DashScopeEmbeddings(Embeddings):
                 resp = httpx.post(
                     self._url,
                     headers=self._headers,
-                    json={"model": self.model, "input": texts},
+                    json={"model": self.model, "input": texts, "dimensions": self.dimensions},
                     timeout=60,
                 )
                 if resp.status_code == 429:
@@ -135,6 +136,7 @@ class ShipDatabase:
             model=embed_cfg.get("model", "text-embedding-v4"),
             api_key=embed_cfg.get("api_key", ""),
             base_url=embed_cfg.get("base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+            dimensions=embed_cfg.get("dimensions", 1024),
         )
 
         # ── 检索参数 ──
