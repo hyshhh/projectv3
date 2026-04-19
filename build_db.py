@@ -21,6 +21,7 @@ import base64
 import csv
 import json
 import logging
+import re
 import sys
 from pathlib import Path
 
@@ -117,8 +118,17 @@ def recognize_ship(image_path: Path, api_key: str, base_url: str, model: str) ->
     try:
         result = json.loads(content)
     except json.JSONDecodeError:
-        logger.warning("模型返回非 JSON 格式，使用原始文本: %s", content[:200])
-        result = {"hull_number": "", "description": content}
+        # 尝试从文本中提取 JSON 对象
+        match = re.search(r'\{[^}]+\}', content, re.DOTALL)
+        if match:
+            try:
+                result = json.loads(match.group())
+            except json.JSONDecodeError:
+                logger.warning("模型返回非 JSON 格式，使用原始文本: %s", content[:200])
+                result = {"hull_number": "", "description": content}
+        else:
+            logger.warning("模型返回非 JSON 格式，使用原始文本: %s", content[:200])
+            result = {"hull_number": "", "description": content}
 
     return {
         "hull_number": str(result.get("hull_number", "")).strip(),
@@ -323,12 +333,11 @@ def _rewrite_csv(csv_path: Path, data: dict[str, str]) -> None:
             writer.writerow(["hull_number", "description"])
             for hn, desc in data.items():
                 writer.writerow([hn, desc])
-        tmp_path.replace(csv_path)
     except Exception:
-        # 清理临时文件
         if tmp_path.exists():
             tmp_path.unlink()
         raise
+    tmp_path.replace(csv_path)
 
 
 if __name__ == "__main__":
