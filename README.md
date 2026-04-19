@@ -372,9 +372,12 @@ modelscope download --model Qwen/Qwen3-Embedding-0.6B --local_dir ./models/Qwen3
 # 2. 用 vLLM 部署为 OpenAI 兼容 API
 python -m vllm.entrypoints.openai.api_server \
   --model ./models/Qwen3-Embedding-0.6B \
-  --host 0.0.0.0 \
-  --port 7891 \
-  --task embed
+  --api-key abc123 \
+  --served-model-name Qwen3-Embedding-0.6B \
+  --convert embed \
+  --gpu-memory-utilization 0.15 \
+  --max-model-len 2048 \
+  --port 7891
 ```
 
 启动成功后会看到类似输出：
@@ -402,7 +405,8 @@ embed:
 # 测试 Embedding API 是否正常
 curl http://localhost:7891/v1/embeddings \
   -H "Content-Type: application/json" \
-  -d '{"model": "Qwen3-Embedding-0.6B", "input": ["测试文本"], "dimensions": 1024}'
+  -H "Authorization: Bearer abc123" \
+  -d '{"model": "Qwen3-Embedding-0.6B", "input": ["测试文本"]}'
 ```
 
 返回包含 `embedding` 数组即表示部署成功。
