@@ -215,7 +215,7 @@ CHAT_MODEL=Qwen/Qwen3-VL-4B-AWQ
 LLM_API_KEY=your-llm-api-key
 LLM_BASE_URL=http://localhost:7890/v1
 
-# Embedding 模型
+# Embedding 模型（默认云端，也可本地部署，见下方"本地部署 Embedding 模型"章节）
 EMBED_MODEL=text-embedding-v4
 EMBED_API_KEY=your-embed-api-key
 EMBED_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
@@ -318,6 +318,75 @@ print(answer)
 ```
 
 设置 `SHIP_DB_PATH=./data/ships.json`，并将 `VECTOR_STORE_AUTO_REBUILD=true` 以重建索引。
+
+## 🧠 本地部署 Embedding 模型（可选）
+
+默认使用 DashScope 云端 Embedding 服务（按 token 收费、有 batch 限制）。推荐本地部署，免费且无限制。
+
+### 推荐模型
+
+| 模型 | 参数量 | 显存占用 | 维度 | 特点 |
+|------|--------|---------|------|------|
+| **Qwen3-Embedding-0.6B** ⭐ | 0.6B | ~1.5GB | 1024 | 极轻量，中文效果好，Qwen 官方出品 |
+| BGE-M3 | ~2.2GB | ~3GB | 1024 | 中英双语强，MTEB 榜单前列 |
+| bge-large-zh-v1.5 | ~1.3GB | ~2GB | 1024 | 纯中文优化，模型小 |
+
+推荐 **Qwen3-Embedding-0.6B**，显存占用极低，和你的 LLM 可以跑在同一张卡上。
+
+### 部署步骤
+
+```bash
+# 1. 下载模型（ModelScope）
+pip install modelscope
+modelscope download --model Qwen/Qwen3-Embedding-0.6B --local_dir ./models/Qwen3-Embedding-0.6B
+
+# 2. 用 vLLM 部署为 OpenAI 兼容 API
+python -m vllm.entrypoints.openai.api_server \
+  --model ./models/Qwen3-Embedding-0.6B \
+  --host 0.0.0.0 \
+  --port 7891 \
+  --task embed
+```
+
+启动成功后会看到类似输出：
+```
+INFO:     Uvicorn running on http://0.0.0.0:7891
+```
+
+### 修改配置
+
+编辑 `config.yaml`，将 Embedding 指向本地服务：
+
+```yaml
+embed:
+  model: "Qwen3-Embedding-0.6B"
+  api_key: "abc123"                  # 本地部署随意填
+  base_url: "http://localhost:7891/v1"  # 改为本地地址
+  dimensions: 1024
+```
+
+首次运行会自动构建 FAISS 向量库，后续启动直接加载缓存。
+
+### 验证部署
+
+```bash
+# 测试 Embedding API 是否正常
+curl http://localhost:7891/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{"model": "Qwen3-Embedding-0.6B", "input": ["测试文本"], "dimensions": 1024}'
+```
+
+返回包含 `embedding` 数组即表示部署成功。
+
+### 本地 vs 云端对比
+
+| | DashScope 云端 | 本地 Qwen3-Embedding-0.6B |
+|---|---|---|
+| 延迟 | ~200-500ms（网络） | ~20-50ms（本地） |
+| 费用 | 按 token 收费 | 免费 |
+| batch 限制 | 10 条/次 | 无限制 |
+| 网络依赖 | 需联网 | 完全离线 |
+| 显存占用 | 0 | ~1.5GB |
 
 ## 🧪 测试
 
