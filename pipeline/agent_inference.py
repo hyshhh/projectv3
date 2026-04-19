@@ -273,6 +273,7 @@ class AgentInference:
         """
         threads = []
         for task in tasks:
+            # 默认参数 t=task 捕获当前循环值，避免闭包变量覆盖
             def _worker(t=task, cb=callback):
                 result = self.infer_single(
                     crop=t["crop"],

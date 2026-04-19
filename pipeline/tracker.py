@@ -163,6 +163,10 @@ class TrackManager:
 
         return len(stale_ids)
 
+    def get(self, track_id: int) -> TrackInfo | None:
+        """只读查询 track，不存在返回 None（不创建）。"""
+        return self._tracks.get(track_id)
+
     @property
     def active_tracks(self) -> dict[int, TrackInfo]:
         return dict(self._tracks)

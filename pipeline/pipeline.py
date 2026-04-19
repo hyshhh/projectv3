@@ -27,6 +27,7 @@ import numpy as np
 
 from pipeline.agent_inference import AgentInference, InferenceResult
 from pipeline.detector import ShipDetector, Detection
+from pipeline.demo import DemoRenderer
 from pipeline.fps import FPSMeter
 from pipeline.tracker import TrackManager, TrackInfo
 from pipeline.video_input import InputSource
@@ -65,7 +66,7 @@ class ShipPipeline:
             config: 全局配置字典。None 则从 config.yaml 加载。
         """
         if config is None:
-            from config import load_config
+            from ..config import load_config
             config = load_config()
 
         self._config = config
@@ -80,7 +81,7 @@ class ShipPipeline:
         self._demo_enabled = pipe_cfg.get("demo", False)
 
         # 读取 Agent 数据库配置
-        from database import ShipDatabase
+        from ..database import ShipDatabase
         self._db = ShipDatabase(config=config)
 
         # 初始化组件
@@ -103,6 +104,12 @@ class ShipPipeline:
         )
 
         self._fps = FPSMeter(window_seconds=10.0)
+
+        # Demo 渲染器（替代内联绘制逻辑）
+        self._renderer = DemoRenderer(
+            show_fps=True,
+            show_track_id=True,
+        )
 
         # 并发模式相关
         self._task_queue: queue.Queue[FrameTask] = queue.Queue(
@@ -342,87 +349,22 @@ class ShipPipeline:
         self._agent_workers.clear()
         logger.info("Agent 工作线程已停止")
 
-    def _draw_detections(
+    def _render_frame(
         self,
         frame: np.ndarray,
         detections: list[Detection],
+        frame_id: int,
     ) -> np.ndarray:
-        """在帧上绘制检测框和识别结果。"""
-        frame_copy = frame.copy()
-
-        for det in detections:
-            x1, y1, x2, y2 = det.bbox
-            display_text = self._tracker.get_display_text(det.track_id)
-
-            # 根据匹配状态选择颜色
-            info = self._tracker.get_or_create(det.track_id, 0)
-            if info.db_matched:
-                color = (0, 200, 0)      # 绿色：库内确定
-            elif info.recognized:
-                color = (0, 165, 255)    # 橙色：已识别未匹配
-            elif info.pending:
-                color = (255, 255, 0)    # 青色：识别中
-            else:
-                color = (200, 200, 200)  # 灰色：等待
-
-            # 绘制检测框
-            cv2.rectangle(frame_copy, (x1, y1), (x2, y2), color, 2)
-
-            # 绘制 track ID
-            label = f"ID:{det.track_id}"
-            cv2.putText(
-                frame_copy, label,
-                (x1, y1 - 10),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1,
-            )
-
-            # 绘制识别结果
-            if display_text:
-                # 背景框
-                (tw, th), _ = cv2.getTextSize(
-                    display_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1
-                )
-                cv2.rectangle(
-                    frame_copy,
-                    (x1, y2 + 2),
-                    (x1 + tw + 4, y2 + th + 8),
-                    color, -1,
-                )
-                # 文字（白色）
-                cv2.putText(
-                    frame_copy, display_text,
-                    (x1 + 2, y2 + th + 5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1,
-                )
-
-        return frame_copy
-
-    def _draw_hud(self, frame: np.ndarray, frame_id: int) -> np.ndarray:
-        """在帧上绘制 HUD 信息（FPS、帧号等）。"""
-        fps_info = self._fps.get_all_fps()
-        mode = "Concurrent" if self._concurrent_mode else "Cascade"
-
-        lines = [
-            f"Frame: {frame_id}",
-            f"Mode: {mode}",
-        ]
-        for ch, fps in fps_info.items():
-            lines.append(f"{ch}: {fps:.1f} FPS")
-
-        queue_depth = self._task_queue.qsize()
-        if self._concurrent_mode:
-            lines.append(f"Queue: {queue_depth}/{self._max_queued_frames}")
-
-        y_offset = 20
-        for line in lines:
-            cv2.putText(
-                frame, line,
-                (10, y_offset),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1,
-            )
-            y_offset += 20
-
-        return frame
+        """通过 DemoRenderer 在帧上绘制检测框、识别结果和 HUD。"""
+        return self._renderer.render(
+            frame=frame,
+            detections=detections,
+            tracks=self._tracker.active_tracks,
+            fps_info=self._fps.get_all_fps(),
+            frame_id=frame_id,
+            queue_depth=self._task_queue.qsize(),
+            max_queue=self._max_queued_frames,
+        )
 
     def process(
         self,
@@ -517,8 +459,7 @@ class ShipPipeline:
 
                 # 渲染输出
                 if self._demo_enabled or output_path or display:
-                    display_frame = self._draw_detections(frame, last_detections)
-                    display_frame = self._draw_hud(display_frame, frame_id)
+                    display_frame = self._render_frame(frame, last_detections, frame_id)
                 else:
                     display_frame = frame
 

@@ -15,6 +15,8 @@ from pipeline.agent_inference import AgentInference
 from pipeline.tracker import TrackManager
 from pipeline.pipeline import ShipPipeline
 from pipeline.fps import FPSMeter
+from pipeline.video_input import InputSource
+from pipeline.demo import DemoRenderer
 
 __all__ = [
     "ShipDetector",
@@ -22,4 +24,6 @@ __all__ = [
     "TrackManager",
     "ShipPipeline",
     "FPSMeter",
+    "InputSource",
+    "DemoRenderer",
 ]
