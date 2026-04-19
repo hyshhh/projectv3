@@ -107,17 +107,21 @@ class ShipDetector:
 
         boxes = results[0].boxes
 
+        # 跟踪器未分配 ID 时，boxes.id 为 None
+        if boxes.id is None:
+            return detections
+
         for i in range(len(boxes)):
             # 获取 track ID
-            track_id_tensor = boxes.id
-            if track_id_tensor is None:
-                # 跟踪器未分配 ID，跳过
-                continue
-            track_id = int(track_id_tensor[i].item())
+            track_id = int(boxes.id[i].item())
 
             # 获取 bbox (xyxy 格式)
             xyxy = boxes.xyxy[i].cpu().numpy().astype(int)
             x1, y1, x2, y2 = int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3])
+
+            # 确保 bbox 有效（x2 > x1, y2 > y1）
+            if x2 <= x1 or y2 <= y1:
+                continue
 
             # 获取置信度
             conf = float(boxes.conf[i].item())

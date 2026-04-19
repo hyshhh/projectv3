@@ -19,7 +19,6 @@ import logging
 import queue
 import threading
 import time
-from dataclasses import dataclass, field
 from typing import Any, Callable
 
 import cv2
@@ -29,28 +28,10 @@ from pipeline.agent_inference import AgentInference, InferenceResult
 from pipeline.detector import ShipDetector, Detection
 from pipeline.demo import DemoRenderer
 from pipeline.fps import FPSMeter
-from pipeline.tracker import TrackManager, TrackInfo
+from pipeline.tracker import TrackManager
 from pipeline.video_input import InputSource
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class FrameTask:
-    """帧级异步任务。"""
-    frame_id: int
-    timestamp: float
-    track_id: int
-    crop: np.ndarray
-    bbox: tuple[int, int, int, int]
-
-
-@dataclass
-class PendingResult:
-    """待匹配的异步推理结果。"""
-    frame_id: int
-    track_id: int
-    result: InferenceResult
 
 
 class ShipPipeline:
@@ -73,12 +54,12 @@ class ShipPipeline:
 
         # 读取 pipeline 相关配置
         pipe_cfg = config.get("pipeline", {})
-        self._concurrent_mode = pipe_cfg.get("concurrent_mode", False)
-        self._max_concurrent = pipe_cfg.get("max_concurrent", 4)
-        self._max_queued_frames = pipe_cfg.get("max_queued_frames", 30)
-        self._process_every_n = pipe_cfg.get("process_every_n_frames", 1)
-        self._prompt_mode = pipe_cfg.get("prompt_mode", "detailed")
-        self._demo_enabled = pipe_cfg.get("demo", False)
+        self._concurrent_mode: bool = pipe_cfg.get("concurrent_mode", False)
+        self._max_concurrent: int = pipe_cfg.get("max_concurrent", 4)
+        self._max_queued_frames: int = pipe_cfg.get("max_queued_frames", 30)
+        self._process_every_n: int = max(1, pipe_cfg.get("process_every_n_frames", 1))
+        self._prompt_mode: str = pipe_cfg.get("prompt_mode", "detailed")
+        self._demo_enabled: bool = pipe_cfg.get("demo", False)
 
         # 读取 Agent 数据库配置
         from database import ShipDatabase
@@ -105,17 +86,17 @@ class ShipPipeline:
 
         self._fps = FPSMeter(window_seconds=10.0)
 
-        # Demo 渲染器（替代内联绘制逻辑）
+        # Demo 渲染器
         self._renderer = DemoRenderer(
             show_fps=True,
             show_track_id=True,
         )
 
         # 并发模式相关
-        self._task_queue: queue.Queue[FrameTask] = queue.Queue(
+        self._task_queue: queue.Queue = queue.Queue(
             maxsize=self._max_queued_frames
         )
-        self._result_queue: queue.Queue[PendingResult] = queue.Queue()
+        self._result_queue: queue.Queue = queue.Queue()
         self._agent_workers: list[threading.Thread] = []
         self._stop_event = threading.Event()
 
@@ -132,13 +113,15 @@ class ShipPipeline:
             self._prompt_mode,
         )
 
+    # ── Agent 链路日志 ──────────────────────────
+
     def _log_agent_trace(
         self,
         event_type: str,
         track_id: int,
         frame_id: int,
         content: str = "",
-        **extra,
+        **extra: Any,
     ) -> None:
         """记录 Agent 运行链路到 trace 日志。"""
         entry = {
@@ -152,7 +135,6 @@ class ShipPipeline:
         with self._trace_lock:
             self._agent_trace.append(entry)
 
-        # 同时写入日志
         logger.info(
             "[AgentTrace] %s | track=%d frame=%d | %s%s",
             event_type.upper(),
@@ -161,6 +143,8 @@ class ShipPipeline:
             content[:100] if content else "",
             f" | {extra}" if extra else "",
         )
+
+    # ── 数据库查找 ──────────────────────────────
 
     def _db_lookup(self, hull_number: str, description: str) -> tuple[str, str, bool]:
         """
@@ -177,15 +161,29 @@ class ShipPipeline:
 
         # 语义检索
         if description:
-            results = self._db.semantic_search_filtered(description)
-            if results:
-                best = results[0]
-                return best["hull_number"], best["description"], True
+            try:
+                results = self._db.semantic_search_filtered(description)
+                if results:
+                    best = results[0]
+                    return best["hull_number"], best["description"], True
+            except Exception as e:
+                logger.warning("语义检索异常: %s", e)
 
         return "", "", False
 
+    # ── 推理结果处理 ────────────────────────────
+
     def _handle_recognition_result(self, result: InferenceResult) -> None:
         """处理一次 Agent 推理结果：绑定到 track 并查询数据库。"""
+        # 推理出错时也要解除 pending 状态
+        if result.error:
+            logger.warning(
+                "推理出错 (track=%d, frame=%d): %s",
+                result.track_id, result.frame_id, result.error,
+            )
+            self._tracker.cancel_pending(result.track_id)
+            return
+
         self._log_agent_trace(
             "inference_result",
             track_id=result.track_id,
@@ -221,6 +219,8 @@ class ShipPipeline:
                 content=f"未匹配: {result.hull_number or '未知'}",
             )
 
+    # ── 级联模式 ────────────────────────────────
+
     def _cascade_process(
         self,
         detections: list[Detection],
@@ -234,11 +234,13 @@ class ShipPipeline:
             if det.crop is None or det.crop.size == 0:
                 continue
 
+            self._tracker.mark_pending(det.track_id)
+
             self._log_agent_trace(
                 "cascade_infer_start",
                 track_id=det.track_id,
                 frame_id=frame_id,
-                content=f"同步推理开始",
+                content="同步推理开始",
             )
 
             result = self._agent.infer_single(
@@ -248,9 +250,10 @@ class ShipPipeline:
             )
             self._handle_recognition_result(result)
 
+    # ── 并发模式 ────────────────────────────────
+
     def _concurrent_process(
         self,
-        frame: np.ndarray,
         detections: list[Detection],
         frame_id: int,
     ) -> None:
@@ -265,13 +268,12 @@ class ShipPipeline:
             # 标记为 pending
             self._tracker.mark_pending(det.track_id)
 
-            task = FrameTask(
-                frame_id=frame_id,
-                timestamp=time.time(),
-                track_id=det.track_id,
-                crop=det.crop.copy(),
-                bbox=det.bbox,
-            )
+            task = {
+                "frame_id": frame_id,
+                "timestamp": time.time(),
+                "track_id": det.track_id,
+                "crop": det.crop.copy(),
+            }
 
             try:
                 self._task_queue.put_nowait(task)
@@ -287,8 +289,7 @@ class ShipPipeline:
                     self._max_queued_frames, frame_id, det.track_id,
                 )
                 # 取消 pending 状态
-                info = self._tracker.get_or_create(det.track_id, frame_id)
-                info.pending = False
+                self._tracker.cancel_pending(det.track_id)
 
     def _agent_worker_loop(self) -> None:
         """Agent 工作线程：从队列取任务并推理。"""
@@ -298,39 +299,56 @@ class ShipPipeline:
             except queue.Empty:
                 continue
 
+            track_id = task["track_id"]
+            frame_id = task["frame_id"]
+            crop = task["crop"]
+
             self._log_agent_trace(
                 "concurrent_infer_start",
-                track_id=task.track_id,
-                frame_id=task.frame_id,
+                track_id=track_id,
+                frame_id=frame_id,
                 content="异步推理开始",
             )
 
-            result = self._agent.infer_single(
-                crop=task.crop,
-                track_id=task.track_id,
-                frame_id=task.frame_id,
-            )
+            try:
+                result = self._agent.infer_single(
+                    crop=crop,
+                    track_id=track_id,
+                    frame_id=frame_id,
+                )
+            except Exception as e:
+                logger.exception("Agent 推理异常 (track=%d, frame=%d)", track_id, frame_id)
+                result = InferenceResult(
+                    hull_number="",
+                    description="",
+                    track_id=track_id,
+                    frame_id=frame_id,
+                    error=str(e),
+                )
 
             # 将结果放入结果队列
-            pending = PendingResult(
-                frame_id=task.frame_id,
-                track_id=task.track_id,
-                result=result,
-            )
-            self._result_queue.put(pending)
+            self._result_queue.put({
+                "frame_id": frame_id,
+                "track_id": track_id,
+                "result": result,
+            })
 
-    def _process_pending_results(self) -> None:
-        """处理已完成的异步推理结果。"""
+    def _drain_results(self) -> int:
+        """排空结果队列，处理所有已完成的异步推理结果。返回处理数量。"""
+        count = 0
         while True:
             try:
                 pending = self._result_queue.get_nowait()
-                self._handle_recognition_result(pending.result)
+                self._handle_recognition_result(pending["result"])
+                count += 1
             except queue.Empty:
                 break
+        return count
 
     def _start_agent_workers(self) -> None:
         """启动 Agent 工作线程池。"""
         self._stop_event.clear()
+        self._agent_workers.clear()
         for i in range(self._max_concurrent):
             worker = threading.Thread(
                 target=self._agent_worker_loop,
@@ -342,12 +360,32 @@ class ShipPipeline:
         logger.info("启动 %d 个 Agent 工作线程", self._max_concurrent)
 
     def _stop_agent_workers(self) -> None:
-        """停止 Agent 工作线程。"""
+        """停止 Agent 工作线程，等待全部完成。"""
         self._stop_event.set()
         for worker in self._agent_workers:
-            worker.join(timeout=5.0)
+            worker.join(timeout=10.0)
+            if worker.is_alive():
+                logger.warning("工作线程 %s 未在超时内退出", worker.name)
         self._agent_workers.clear()
+
+        # 排空剩余任务和结果
+        remaining_tasks = 0
+        while not self._task_queue.empty():
+            try:
+                self._task_queue.get_nowait()
+                remaining_tasks += 1
+            except queue.Empty:
+                break
+        if remaining_tasks:
+            logger.info("清理 %d 个未处理任务", remaining_tasks)
+
+        remaining_results = self._drain_results()
+        if remaining_results:
+            logger.info("处理 %d 个残留结果", remaining_results)
+
         logger.info("Agent 工作线程已停止")
+
+    # ── 渲染 ────────────────────────────────────
 
     def _render_frame(
         self,
@@ -365,6 +403,8 @@ class ShipPipeline:
             queue_depth=self._task_queue.qsize(),
             max_queue=self._max_queued_frames,
         )
+
+    # ── 主流程 ──────────────────────────────────
 
     def process(
         self,
@@ -400,7 +440,11 @@ class ShipPipeline:
                     input_src.source_fps,
                     (input_src.width, input_src.height),
                 )
-                logger.info("输出视频: %s", output_path)
+                if not video_writer.isOpened():
+                    logger.error("无法创建输出视频: %s", output_path)
+                    video_writer = None
+                else:
+                    logger.info("输出视频: %s", output_path)
 
             # 启动并发 worker
             if self._concurrent_mode:
@@ -408,7 +452,6 @@ class ShipPipeline:
 
             frame_id = 0
             total_detections = 0
-            total_recognized = 0
             start_time = time.time()
 
             logger.info(
@@ -436,7 +479,12 @@ class ShipPipeline:
 
                 if should_process:
                     # YOLO 检测 + 跟踪
-                    detections = self._detector.detect(frame, frame_id)
+                    try:
+                        detections = self._detector.detect(frame, frame_id)
+                    except Exception as e:
+                        logger.error("YOLO 检测异常 (frame=%d): %s", frame_id, e)
+                        detections = []
+
                     last_detections = detections
                     total_detections += len(detections)
 
@@ -446,13 +494,13 @@ class ShipPipeline:
 
                     # Agent 推理（级联或并发）
                     if self._concurrent_mode:
-                        self._concurrent_process(frame, detections, frame_id)
+                        self._concurrent_process(detections, frame_id)
                     else:
                         self._cascade_process(detections, frame_id)
 
-                    # 处理异步结果（并发模式）
+                    # 并发模式下排空已完成的结果
                     if self._concurrent_mode:
-                        self._process_pending_results()
+                        self._drain_results()
 
                     # 清理过期 track
                     self._tracker.cleanup_stale(frame_id)
@@ -479,27 +527,32 @@ class ShipPipeline:
                         logger.info("用户按下 q，停止处理")
                         break
                     elif key == ord("d"):
-                        # 按 d 切换提示词模式
                         new_mode = "brief" if self._agent.prompt_mode == "detailed" else "detailed"
                         self._agent.set_prompt_mode(new_mode)
+                        logger.info("提示词模式切换为: %s", new_mode)
 
                 # 处理 FPS
                 self._fps.tick("process")
 
-                # 定期打印 FPS
+                # 定期打印 FPS（每 5 秒）
                 if self._fps.should_print("stream"):
                     elapsed = time.time() - start_time
                     self._fps.print_fps(
                         "stream",
-                        extra=f"frames={frame_id}, elapsed={elapsed:.0f}s",
+                        extra=f"frames={frame_id}, elapsed={elapsed:.0f}s, tracks={len(self._tracker)}",
                     )
                     self._fps.print_fps("process")
 
-                # 定期打印 Agent 运行链路摘要
+                # 定期打印 Agent 运行链路摘要（每 100 帧）
                 if frame_id % 100 == 0:
                     self._print_trace_summary()
 
-            # 统计
+            # ── 处理完成，收集统计 ──
+
+            # 并发模式下最终排空结果
+            if self._concurrent_mode:
+                self._drain_results()
+
             elapsed = time.time() - start_time
             tracks = self._tracker.active_tracks
             total_recognized = sum(1 for t in tracks.values() if t.recognized)
@@ -527,6 +580,20 @@ class ShipPipeline:
 
             return stats
 
+        except KeyboardInterrupt:
+            logger.info("用户中断处理")
+            elapsed = time.time() - start_time
+            return {
+                "total_frames": frame_id,
+                "total_detections": total_detections,
+                "total_tracks": len(self._tracker),
+                "recognized_tracks": 0,
+                "elapsed_seconds": round(elapsed, 1),
+                "avg_fps": round(frame_id / elapsed, 1) if elapsed > 0 else 0,
+                "mode": "concurrent" if self._concurrent_mode else "cascade",
+                "interrupted": True,
+            }
+
         finally:
             if self._concurrent_mode:
                 self._stop_agent_workers()
@@ -536,12 +603,14 @@ class ShipPipeline:
             if display:
                 cv2.destroyAllWindows()
 
+    # ── 链路摘要 ────────────────────────────────
+
     def _print_trace_summary(self) -> None:
         """打印 Agent 运行链路摘要。"""
         with self._trace_lock:
             if not self._agent_trace:
                 return
-            recent = self._agent_trace[-20:]  # 最近 20 条
+            recent = self._agent_trace[-20:]
             logger.info("=== Agent 运行链路摘要 (最近 %d 条) ===", len(recent))
             for entry in recent:
                 logger.info(
@@ -557,6 +626,8 @@ class ShipPipeline:
         """获取完整的 Agent 运行链路日志。"""
         with self._trace_lock:
             return list(self._agent_trace)
+
+    # ── 运行时控制 ──────────────────────────────
 
     def set_demo(self, enabled: bool) -> None:
         """设置 demo 开关。"""

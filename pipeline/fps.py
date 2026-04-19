@@ -25,7 +25,7 @@ class FPSMeter:
         Args:
             window_seconds: 滑动窗口时长（秒）。
         """
-        self._window = window_seconds
+        self._window = max(1.0, window_seconds)  # 最小 1 秒
         self._timestamps: dict[str, deque[float]] = {}
         self._last_print: dict[str, float] = {}
         self._print_interval = 5.0  # 每 5 秒打印一次

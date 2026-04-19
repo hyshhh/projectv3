@@ -101,6 +101,20 @@ class TestTrackManager:
         mgr.mark_pending(1)
         assert mgr.needs_recognition(1) is False
 
+    def test_cancel_pending(self):
+        """取消 pending 后应恢复为可识别状态。"""
+        mgr = TrackManager()
+        mgr.get_or_create(1, 100)
+        mgr.mark_pending(1)
+        assert mgr.needs_recognition(1) is False
+        mgr.cancel_pending(1)
+        assert mgr.needs_recognition(1) is True
+
+    def test_cancel_pending_nonexistent(self):
+        """取消不存在的 track 不应报错。"""
+        mgr = TrackManager()
+        mgr.cancel_pending(999)  # 不应抛异常
+
     def test_bind_result(self):
         mgr = TrackManager()
         mgr.get_or_create(1, 100)
@@ -161,6 +175,43 @@ class TestTrackManager:
         mgr.get_or_create(1, 100)
         mgr.get_or_create(2, 100)
         assert len(mgr) == 2
+
+    def test_concurrent_access(self):
+        """多线程并发访问 TrackManager 不应崩溃。"""
+        import threading
+
+        mgr = TrackManager()
+        errors = []
+
+        def writer():
+            try:
+                for i in range(100):
+                    mgr.get_or_create(i % 10, i)
+                    if i % 3 == 0:
+                        mgr.mark_pending(i % 10)
+                    if i % 5 == 0:
+                        mgr.cancel_pending(i % 10)
+            except Exception as e:
+                errors.append(e)
+
+        def reader():
+            try:
+                for i in range(100):
+                    mgr.needs_recognition(i % 10)
+                    mgr.get(i % 10)
+                    _ = mgr.active_tracks
+                    _ = len(mgr)
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=writer) for _ in range(4)]
+        threads += [threading.Thread(target=reader) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(errors) == 0, f"并发访问出错: {errors}"
 
 
 # ══════════════════════════════════════════════

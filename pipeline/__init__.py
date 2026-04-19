@@ -10,13 +10,13 @@ Pipeline 模块 — 船弦号识别视频处理流水线
   - InputSource: 视频/相机/视频流输入
 """
 
-from pipeline.detector import ShipDetector
-from pipeline.agent_inference import AgentInference
-from pipeline.tracker import TrackManager
-from pipeline.pipeline import ShipPipeline
-from pipeline.fps import FPSMeter
-from pipeline.video_input import InputSource
-from pipeline.demo import DemoRenderer
+from pipeline.detector import ShipDetector  # noqa: F401
+from pipeline.agent_inference import AgentInference  # noqa: F401
+from pipeline.tracker import TrackManager  # noqa: F401
+from pipeline.pipeline import ShipPipeline  # noqa: F401
+from pipeline.fps import FPSMeter  # noqa: F401
+from pipeline.video_input import InputSource  # noqa: F401
+from pipeline.demo import DemoRenderer  # noqa: F401
 
 __all__ = [
     "ShipDetector",

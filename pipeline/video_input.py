@@ -96,13 +96,19 @@ class InputSource:
         if self._height:
             self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._height)
 
-        # 降低缓冲区减少延迟
+        # 降低缓冲区减少延迟（仅对非文件源有效）
         if not self._is_file:
-            self._cap.set(cv2.CAP_PROP_BUFFERSIZE, self._buffer_size)
+            try:
+                self._cap.set(cv2.CAP_PROP_BUFFERSIZE, self._buffer_size)
+            except Exception:
+                pass  # 部分后端不支持设置缓冲区大小
 
         # 读取元信息
         self._total_frames = int(self._cap.get(cv2.CAP_PROP_FRAME_COUNT))
         self._fps = self._cap.get(cv2.CAP_PROP_FPS) or 30.0
+        if self._fps <= 0:
+            self._fps = 30.0
+
         w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 

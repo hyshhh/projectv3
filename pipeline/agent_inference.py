@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import cv2
+import httpx
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -209,7 +210,6 @@ class AgentInference:
                     ],
                 }
 
-                import httpx
                 resp = httpx.post(
                     self._api_url,
                     headers=headers,
@@ -228,8 +228,20 @@ class AgentInference:
                         error=err_msg,
                     )
 
-                data = resp.json()
-                content = data["choices"][0]["message"]["content"]
+                try:
+                    data = resp.json()
+                    content = data["choices"][0]["message"]["content"]
+                except (json.JSONDecodeError, KeyError, IndexError) as e:
+                    err_msg = f"API 响应解析失败: {e}, 原始响应: {resp.text[:300]}"
+                    logger.error("推理失败 (track=%d, frame=%d): %s", track_id, frame_id, err_msg)
+                    return InferenceResult(
+                        hull_number="",
+                        description="",
+                        track_id=track_id,
+                        frame_id=frame_id,
+                        error=err_msg,
+                    )
+
                 parsed = self._parse_response(content)
 
                 logger.info(

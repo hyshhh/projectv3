@@ -154,14 +154,14 @@ class DemoRenderer:
     @staticmethod
     def _get_display_text(track_info: Any) -> str:
         """获取显示文本。"""
-        if not track_info.recognized:
-            return "(识别中...)" if track_info.pending else ""
+        if not getattr(track_info, "recognized", False):
+            return "(识别中...)" if getattr(track_info, "pending", False) else ""
 
-        if track_info.db_matched:
-            return f"(库内确定id：{track_info.db_match_id})"
+        if getattr(track_info, "db_matched", False):
+            return f"(库内确定id：{getattr(track_info, 'db_match_id', '')})"
 
-        label = track_info.hull_number or "未知"
-        desc = track_info.description[:15] if track_info.description else ""
+        label = getattr(track_info, "hull_number", "") or "未知"
+        desc = getattr(track_info, "description", "")[:15]
         if desc:
             return f"(未知id：{label} - {desc})"
         return f"(未知id：{label})"
