@@ -25,7 +25,8 @@ import re
 import sys
 from pathlib import Path
 
-import httpx
+from langchain_core.messages import HumanMessage
+from langchain_openai import ChatOpenAI
 from rich.console import Console
 from rich.prompt import Prompt
 
@@ -67,50 +68,25 @@ def _get_mime_type(image_path: Path) -> str:
     return mime_map.get(ext, "image/jpeg")
 
 
-def recognize_ship(image_path: Path, api_key: str, base_url: str, model: str) -> dict:
+def recognize_ship(image_path: Path, llm: ChatOpenAI) -> dict:
     """
-    调用 Qwen3.5-VL 识别图片中的船只。
+    调用视觉模型识别图片中的船只。
     返回 {"hull_number": str, "description": str}
     """
     b64 = _encode_image(image_path)
     mime = _get_mime_type(image_path)
 
-    url = f"{base_url.rstrip('/')}/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": model,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": RECOGNITION_PROMPT},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{mime};base64,{b64}"},
-                    },
-                ],
-            }
-        ],
-        "temperature": 0.0,
-        "max_tokens": 1024,
-    }
+    msg = HumanMessage(content=[
+        {"type": "text", "text": RECOGNITION_PROMPT},
+        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+    ])
 
-    resp = httpx.post(url, headers=headers, json=payload, timeout=120)
-    resp.raise_for_status()
+    resp = llm.invoke([msg])
+    content = resp.content.strip()
 
-    try:
-        resp_data = resp.json()
-        content = resp_data["choices"][0]["message"]["content"].strip()
-    except (KeyError, IndexError, TypeError) as e:
-        logger.error("API 返回结构异常: %s | 原始响应: %s", e, resp.text[:500])
-        return {"hull_number": "", "description": f"API 返回结构异常: {e}"}
-
-    # 尝试提取 JSON（兼容模型返回 ```json ... ``` 的情况）
+    # 兼容 ```json ... ``` 包裹
     if content.startswith("```"):
-        content = content.split("\n", 1)[-1]  # 去掉第一行 ```json
+        content = content.split("\n", 1)[-1]
         if content.endswith("```"):
             content = content[:-3]
         content = content.strip()
@@ -118,7 +94,6 @@ def recognize_ship(image_path: Path, api_key: str, base_url: str, model: str) ->
     try:
         result = json.loads(content)
     except json.JSONDecodeError:
-        # 尝试从文本中提取 JSON 对象
         match = re.search(r'\{[^}]+\}', content, re.DOTALL)
         if match:
             try:
@@ -208,10 +183,18 @@ def main() -> None:
     # 加载配置
     config = load_config()
     llm_cfg = config.get("llm", {})
-    api_key = llm_cfg.get("api_key", "abc123")
-    base_url = llm_cfg.get("base_url", "http://localhost:7890/v1")
     model = llm_cfg.get("model", "Qwen/Qwen3-VL-4B-AWQ")
+    base_url = llm_cfg.get("base_url", "http://localhost:7890/v1")
     csv_path = Path(config.get("app", {}).get("ship_db_path") or "data/ships.csv")
+
+    # 视觉模型客户端
+    llm = ChatOpenAI(
+        model=model,
+        api_key=llm_cfg.get("api_key", "abc123"),
+        base_url=base_url,
+        temperature=0.0,
+        max_tokens=1024,
+    )
 
     # 确保 CSV 目录存在
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -241,7 +224,7 @@ def main() -> None:
 
         # 1. 调用模型识别
         try:
-            result = recognize_ship(image_path, api_key, base_url, model)
+            result = recognize_ship(image_path, llm)
         except Exception as e:
             console.print(f"  ❌ 识别失败: [red]{e}[/red]")
             skip_count += 1
