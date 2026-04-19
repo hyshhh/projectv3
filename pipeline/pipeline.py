@@ -66,7 +66,7 @@ class ShipPipeline:
             config: 全局配置字典。None 则从 config.yaml 加载。
         """
         if config is None:
-            from ..config import load_config
+            from config import load_config
             config = load_config()
 
         self._config = config
@@ -81,7 +81,7 @@ class ShipPipeline:
         self._demo_enabled = pipe_cfg.get("demo", False)
 
         # 读取 Agent 数据库配置
-        from ..database import ShipDatabase
+        from database import ShipDatabase
         self._db = ShipDatabase(config=config)
 
         # 初始化组件

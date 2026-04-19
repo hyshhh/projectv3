@@ -14,7 +14,9 @@ embed:
   model: "text-embedding-v4"
   api_key: "your-embed-api-key"
   base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
-  dimensions: 1024
+  # dimensions: 向量维度，部分模型（如 DashScope text-embedding-v4）需要指定
+  # 如果使用的模型不需要此参数（如 Qwen3-Embedding-0.6B），设为 null 或注释掉
+  # dimensions: 1024
 
 # RAG 检索参数
 retrieval:

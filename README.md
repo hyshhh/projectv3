@@ -193,7 +193,34 @@ git clone https://github.com/hyshhh/project.git
 cd project
 ```
 
-### 2. 安装依赖
+### 2. 启动视觉模型服务
+
+使用 vLLM 部署模型（兼容 OpenAI API 格式）：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 vllm serve /media/ddc/新加卷/hys/hysnew/Qwen3.5-2B-AWQ \
+  --api-key abc123 \
+  --served-model-name Qwen/Qwen3-VL-4B-AWQ \
+  --max-model-len 1024 \
+  --port 7890 \
+  --gpu-memory-utilization 0.15 \
+  --max-num-seqs 10 \
+  --enable-auto-tool-choice \
+  --tool-call-parser qwen
+```
+
+| 参数 | 值 | 说明 |
+|------|-----|------|
+| `--served-model-name` | `Qwen/Qwen3-VL-4B-AWQ` | 对外暴露的模型名称 |
+| `--api-key` | `abc123` | API 密钥 |
+| `--port` | `7890` | 服务端口 |
+| `--max-model-len` | `1024` | 最大上下文长度 |
+| `--gpu-memory-utilization` | `0.15` | GPU 显存占用比例 |
+| `--max-num-seqs` | `10` | 最大并发序列数 |
+| `--enable-auto-tool-choice` | — | 启用自动工具调用 |
+| `--tool-call-parser` | `qwen` | 工具调用解析器 |
+
+### 3. 安装依赖
 
 ```bash
 pip install -e .
@@ -201,7 +228,7 @@ pip install -e .
 pip install -e ".[dev]"
 ```
 
-### 3. 配置环境变量
+### 4. 配置环境变量
 
 ```bash
 cp .env.example .env
@@ -219,6 +246,7 @@ LLM_BASE_URL=http://localhost:7890/v1
 EMBED_MODEL=text-embedding-v4
 EMBED_API_KEY=your-embed-api-key
 EMBED_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+# EMBED_DIMENSIONS=1024  # 部分模型需要（如 DashScope text-embedding-v4），不需要可注释掉
 
 # RAG 检索参数
 RETRIEVAL_TOP_K=3
@@ -228,7 +256,7 @@ RETRIEVAL_SCORE_THRESHOLD=0.5
 VECTOR_STORE_PATH=./vector_store
 ```
 
-### 4. 运行
+### 5. 运行
 
 ```bash
 # 单次查询
@@ -299,6 +327,7 @@ print(answer)
 | `EMBED_MODEL` | Embedding 模型名称 | `text-embedding-v4` |
 | `EMBED_API_KEY` | Embedding API Key | — |
 | `EMBED_BASE_URL` | Embedding 服务地址 | DashScope |
+| `EMBED_DIMENSIONS` | Embedding 向量维度（部分模型不需要，如 Qwen3-Embedding-0.6B 设为 null） | `null`（不传） |
 | `RETRIEVAL_TOP_K` | 语义检索返回条数 | `3` |
 | `RETRIEVAL_SCORE_THRESHOLD` | 相似度阈值（低于此值的结果被过滤） | `0.5` |
 | `VECTOR_STORE_PATH` | FAISS 索引持久化路径 | `./vector_store` |
@@ -362,7 +391,7 @@ embed:
   model: "Qwen3-Embedding-0.6B"
   api_key: "abc123"                  # 本地部署随意填
   base_url: "http://localhost:7891/v1"  # 改为本地地址
-  dimensions: 1024
+  # dimensions: 1024  # Qwen3-Embedding-0.6B 不需要此参数，留空或注释掉
 ```
 
 首次运行会自动构建 FAISS 向量库，后续启动直接加载缓存。

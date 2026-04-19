@@ -134,7 +134,7 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
 
-    from ..config import load_config
+    from config import load_config
     from pipeline.pipeline import ShipPipeline
 
     config = load_config()

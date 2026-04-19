@@ -25,7 +25,7 @@ _DEFAULTS: dict[str, Any] = {
         "model": "text-embedding-v4",
         "api_key": "",
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "dimensions": 1024,
+        "dimensions": None,
     },
     "retrieval": {
         "top_k": 3,
