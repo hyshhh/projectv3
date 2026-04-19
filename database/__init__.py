@@ -56,45 +56,53 @@ class DashScopeEmbeddings(Embeddings):
         import time
 
         max_retries = 3
-        last_error: Exception | None = None
+        batch_size = 10  # DashScope text-embedding-v4 单次上限
+        all_embeddings: list[list[float]] = []
 
-        for attempt in range(max_retries):
-            try:
-                resp = httpx.post(
-                    self._url,
-                    headers=self._headers,
-                    json={"model": self.model, "input": texts, "dimensions": self.dimensions},
-                    timeout=60,
-                )
-                if resp.status_code == 429:
-                    retry_after = int(resp.headers.get("Retry-After", 2 ** attempt))
-                    logger.warning("Embedding API 限流，%ds 后重试 (%d/%d)", retry_after, attempt + 1, max_retries)
-                    time.sleep(retry_after)
-                    continue
-                if resp.status_code >= 500:
-                    logger.warning("Embedding API 服务错误 [%d]，%ds 后重试 (%d/%d)", resp.status_code, 2 ** attempt, attempt + 1, max_retries)
-                    time.sleep(2 ** attempt)
-                    continue
-                if not resp.is_success:
-                    try:
-                        err_body = resp.json()
-                        err_msg = err_body.get("error", {}).get("message", resp.text[:300])
-                    except Exception:
-                        err_msg = resp.text[:300]
-                    raise RuntimeError(
-                        f"Embedding API 返回 {resp.status_code}: {err_msg}\n"
-                        f"请检查 config.yaml 中 embed 配置（model / api_key / base_url）。"
+        for batch_start in range(0, len(texts), batch_size):
+            batch = texts[batch_start : batch_start + batch_size]
+            last_error: Exception | None = None
+
+            for attempt in range(max_retries):
+                try:
+                    resp = httpx.post(
+                        self._url,
+                        headers=self._headers,
+                        json={"model": self.model, "input": batch, "dimensions": self.dimensions},
+                        timeout=60,
                     )
-                resp.raise_for_status()
-                data = resp.json()
-                return [item["embedding"] for item in data["data"]]
-            except (httpx.TimeoutException, httpx.NetworkError) as e:
-                last_error = e
-                wait = 2 ** attempt
-                logger.warning("Embedding API 网络错误: %s，%ds 后重试 (%d/%d)", e, wait, attempt + 1, max_retries)
-                time.sleep(wait)
+                    if resp.status_code == 429:
+                        retry_after = int(resp.headers.get("Retry-After", 2 ** attempt))
+                        logger.warning("Embedding API 限流，%ds 后重试 (%d/%d)", retry_after, attempt + 1, max_retries)
+                        time.sleep(retry_after)
+                        continue
+                    if resp.status_code >= 500:
+                        logger.warning("Embedding API 服务错误 [%d]，%ds 后重试 (%d/%d)", resp.status_code, 2 ** attempt, attempt + 1, max_retries)
+                        time.sleep(2 ** attempt)
+                        continue
+                    if not resp.is_success:
+                        try:
+                            err_body = resp.json()
+                            err_msg = err_body.get("error", {}).get("message", resp.text[:300])
+                        except Exception:
+                            err_msg = resp.text[:300]
+                        raise RuntimeError(
+                            f"Embedding API 返回 {resp.status_code}: {err_msg}\n"
+                            f"请检查 config.yaml 中 embed 配置（model / api_key / base_url）。"
+                        )
+                    data = resp.json()
+                    batch_embeddings = [item["embedding"] for item in data["data"]]
+                    all_embeddings.extend(batch_embeddings)
+                    break
+                except (httpx.TimeoutException, httpx.NetworkError) as e:
+                    last_error = e
+                    wait = 2 ** attempt
+                    logger.warning("Embedding API 网络错误: %s，%ds 后重试 (%d/%d)", e, wait, attempt + 1, max_retries)
+                    time.sleep(wait)
+            else:
+                raise RuntimeError(f"Embedding API 调用失败，已重试 {max_retries} 次") from last_error
 
-        raise RuntimeError(f"Embedding API 调用失败，已重试 {max_retries} 次") from last_error
+        return all_embeddings
 
     def embed_query(self, text: str) -> list[float]:
         return self.embed_documents([text])[0]
