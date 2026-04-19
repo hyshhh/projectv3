@@ -31,3 +31,44 @@ app:
   log_level: "INFO"
   # CSV 数据库路径（相对于项目根目录）
   ship_db_path: "./data/ships.csv"
+
+# Pipeline 视频处理流水线配置
+pipeline:
+  # 级联/并发双模式
+  # false = 级联模式：同步等待 Agent 返回结果
+  # true  = 并发模式：YOLO 不等待，Agent 异步推理
+  concurrent_mode: false
+
+  # 最大并发 Agent 推理数
+  max_concurrent: 4
+
+  # 最大队列深度（并发模式下防止 OOM）
+  max_queued_frames: 30
+
+  # 每 N 帧处理一次（1 = 每帧都处理）
+  process_every_n_frames: 1
+
+  # 提示词模式："detailed"（详细）或 "brief"（简略）
+  prompt_mode: "detailed"
+
+  # Demo 开关：true 开启视频 demo 可视化，false 关闭
+  demo: false
+
+  # YOLO 模型路径
+  yolo_model: "yolov8n.pt"
+
+  # 推理设备："" 自动选择，"cpu" 强制 CPU，"0" 表示 GPU 0
+  device: ""
+
+  # 检测置信度阈值
+  conf_threshold: 0.25
+
+  # 追踪算法："bytetrack" 或 "botsort"
+  tracker: "bytetrack"
+
+  # 只检测 COCO 类别 8（船），null 表示检测所有类别
+  detect_classes:
+    - 8
+
+  # 超过此帧数未出现的 track 被清理
+  max_stale_frames: 300
