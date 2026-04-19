@@ -1,0 +1,32 @@
+# ═══════════════════════════════════════════
+# Ship Hull Agent — 全局配置文件
+# ═══════════════════════════════════════════
+
+# 对话模型
+llm:
+  model: "Qwen/Qwen3-VL-4B-AWQ"
+  api_key: "abc123"
+  base_url: "http://localhost:7890/v1"
+  temperature: 0.0
+
+# Embedding 模型
+embed:
+  model: "text-embedding-v4"
+  api_key: "your-embed-api-key"
+  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+# RAG 检索参数
+retrieval:
+  top_k: 3
+  score_threshold: 0.5
+
+# 向量库配置
+vector_store:
+  persist_path: "./vector_store"
+  auto_rebuild: false
+
+# 应用配置
+app:
+  log_level: "INFO"
+  # CSV 数据库路径（相对于项目根目录）
+  ship_db_path: "./data/ships.csv"
