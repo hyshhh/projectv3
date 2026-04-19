@@ -15,23 +15,38 @@
 
 ```
 ship-hull-agent/
-├── config/
-│   └── __init__.py          # pydantic-settings：LLM / Embedding / 检索 / 向量库 全部参数
+├── config.py              # 配置读取：config.yaml + 内置默认值
+├── config.yaml            # 全局配置文件
 ├── database/
-│   └── __init__.py          # ShipDatabase：精确查找 + FAISS 向量语义检索
+│   └── __init__.py        # ShipDatabase：精确查找 + FAISS 向量语义检索
 ├── tools/
-│   └── __init__.py          # LangChain @tool：lookup_by_hull_number / retrieve_by_description
+│   └── __init__.py        # LangChain @tool：lookup_by_hull_number / retrieve_by_description
 ├── agent/
-│   └── __init__.py          # ShipHullAgent：ReAct Agent + Few-shot 示例
+│   └── __init__.py        # ShipHullAgent：ReAct Agent + Few-shot 示例
 ├── cli/
-│   ├── __init__.py          # Rich CLI：单次查询 / 交互 REPL / --verbose 调用链
-│   └── main.py              # python -m cli.main 入口
+│   ├── __init__.py        # Rich CLI：单次查询 / 交互 REPL / --verbose 调用链
+│   └── main.py            # ship-hull 入口
+├── pipeline/              # 🎬 视频处理流水线
+│   ├── __init__.py        # 模块导出
+│   ├── __main__.py        # python -m pipeline 入口
+│   ├── cli.py             # 命令行参数解析
+│   ├── pipeline.py        # 主流水线编排（级联/并发双模式）
+│   ├── detector.py        # YOLO 船只检测 + ByteTrack 跟踪
+│   ├── agent_inference.py # Qwen3.5 VLM 弦号识别
+│   ├── tracker.py         # 跟踪状态管理（线程安全）
+│   ├── fps.py             # 10 秒滑动窗口 FPS 统计
+│   ├── video_input.py     # 视频/相机/视频流统一输入
+│   └── demo.py            # Demo 可视化渲染
+├── build_db.py            # 批量建库脚本
+├── data/
+│   └── ships.csv          # 船只数据库
 ├── tests/
 │   ├── __init__.py
-│   └── test_database.py     # 20 个单元测试（配置 + 数据库）
-├── .env.example             # 环境变量模板
+│   ├── test_database.py   # 数据库单元测试
+│   └── test_pipeline.py   # Pipeline 单元测试 + 并发压力测试
+├── .env.example           # 环境变量模板
 ├── .gitignore
-├── pyproject.toml           # 项目元数据 + 依赖声明
+├── pyproject.toml         # 项目元数据 + 依赖声明
 └── README.md
 ```
 
@@ -314,6 +329,191 @@ answer = agent.run("弦号0014是什么船")
 print(answer)
 ```
 
+## 🎬 Pipeline 视频处理流水线
+
+基于 **YOLO + Qwen3.5 VLM + Agent** 的实时船只检测与弦号识别系统。支持视频文件、USB 相机、RTSP 视频流输入。
+
+### 架构概览
+
+```
+视频输入 → YOLO 检测+跟踪 → 裁剪船只区域 → Qwen3.5 VLM 识别弦号+描述
+                                                      │
+                                          Agent 数据库匹配（精确/语义）
+                                                      │
+                                          绘制检测框+识别结果 → 输出
+```
+
+### 快速使用
+
+```bash
+# 处理视频文件
+python -m pipeline.cli video.mp4
+
+# USB 相机（设备号 0）
+python -m pipeline.cli 0
+
+# RTSP 视频流
+python -m pipeline.cli rtsp://192.168.1.100/stream
+
+# 开启 demo 可视化 + 输出结果视频
+python -m pipeline.cli video.mp4 --demo --output result.mp4
+
+# 并发模式 + 简略提示词
+python -m pipeline.cli video.mp4 --concurrent --prompt-mode brief
+
+# 详细日志
+python -m pipeline.cli video.mp4 --verbose
+```
+
+### 命令行参数
+
+| 参数 | 简写 | 说明 | 默认值 |
+|------|------|------|--------|
+| `source` | — | 输入源：文件路径 / 相机号 / RTSP URL | 必填 |
+| `--output` | `-o` | 输出视频路径 | 无 |
+| `--demo` | — | 开启 demo 可视化（检测框+识别结果叠加） | 关闭 |
+| `--display` | — | 实时显示窗口（需有显示器） | 关闭 |
+| `--concurrent` | `-c` | 使用并发模式（默认级联模式） | 关闭 |
+| `--max-concurrent` | — | 最大并发 Agent 推理数 | `4` |
+| `--max-queued-frames` | — | 并发模式最大队列深度（防 OOM） | `30` |
+| `--process-every` | — | 每 N 帧处理一次 | `1` |
+| `--prompt-mode` | — | 提示词模式：`detailed` / `brief` | `detailed` |
+| `--max-frames` | — | 最大处理帧数（0=不限） | `0` |
+| `--yolo-model` | — | YOLO 模型路径 | `yolov8n.pt` |
+| `--device` | — | 推理设备（`cpu` / GPU 编号） | 自动 |
+| `--conf` | — | 检测置信度阈值 | `0.25` |
+| `--verbose` | `-v` | 详细日志输出 | 关闭 |
+
+### 级联 vs 并发模式
+
+```
+级联模式（默认）：
+  帧 N → YOLO 检测 → 等待 Agent 返回 → 绑定结果 → 渲染帧 N
+  特点：简单可靠，帧间严格有序，速度受 Agent 延迟影响
+
+并发模式（--concurrent）：
+  帧 N → YOLO 检测 → crop 送入队列 → 立即处理帧 N+1
+                    Agent 线程池异步推理 → 结果回填到对应 track
+  特点：高吞吐，帧率不受 Agent 延迟影响，需要更多显存
+```
+
+### config.yaml 中的 Pipeline 配置
+
+```yaml
+pipeline:
+  # 级联/并发双模式
+  # false = 级联模式：同步等待 Agent 返回结果
+  # true  = 并发模式：YOLO 不等待，Agent 异步推理
+  concurrent_mode: false
+
+  # 最大并发 Agent 推理数
+  max_concurrent: 4
+
+  # 最大队列深度（并发模式下防止 OOM）
+  max_queued_frames: 30
+
+  # 每 N 帧处理一次（1 = 每帧都处理）
+  process_every_n_frames: 1
+
+  # 提示词模式："detailed"（详细）或 "brief"（简略）
+  prompt_mode: "detailed"
+
+  # Demo 开关：true 开启视频 demo 可视化，false 关闭
+  demo: false
+
+  # YOLO 模型路径（不存在会自动下载）
+  yolo_model: "yolov8n.pt"
+
+  # 推理设备："" 自动选择，"cpu" 强制 CPU，"0" 表示 GPU 0
+  device: ""
+
+  # 检测置信度阈值
+  conf_threshold: 0.25
+
+  # 追踪算法："bytetrack" 或 "botsort"
+  tracker: "bytetrack"
+
+  # 只检测 COCO 类别 8（船），null 表示检测所有类别
+  detect_classes:
+    - 8
+
+  # 超过此帧数未出现的 track 被清理
+  max_stale_frames: 300
+```
+
+### 交互按键（display 模式下）
+
+| 按键 | 动作 |
+|------|------|
+| `q` | 退出 |
+| `d` | 切换提示词模式（详细 ↔ 简略） |
+| `p` | 暂停/继续 |
+
+### Python API 调用
+
+```python
+from config import load_config
+from pipeline import ShipPipeline
+
+config = load_config()
+pipeline = ShipPipeline(config=config)
+
+# 处理视频
+stats = pipeline.process(
+    source="video.mp4",
+    output_path="result.mp4",
+    display=False,
+    max_frames=1000,
+)
+print(stats)
+# {'total_frames': 1000, 'total_detections': 342, 'total_tracks': 8,
+#  'recognized_tracks': 6, 'elapsed_seconds': 45.2, 'avg_fps': 22.1, 'mode': 'cascade'}
+
+# 运行时控制
+pipeline.set_demo(True)
+pipeline.set_prompt_mode("brief")
+pipeline.switch_to_concurrent(True)
+
+# 查看 Agent 运行链路
+trace = pipeline.agent_trace
+```
+
+### Pipeline 模块结构
+
+```
+pipeline/
+├── __init__.py           # 模块导出
+├── __main__.py           # python -m pipeline 入口
+├── cli.py                # 命令行参数解析 + 启动
+├── pipeline.py           # 主流水线编排（ShipPipeline）
+├── detector.py           # YOLO 船只检测 + ByteTrack 跟踪
+├── agent_inference.py    # Qwen3.5 VLM 弦号识别推理
+├── tracker.py            # 跟踪状态管理（track ID ↔ 弦号绑定）
+├── fps.py                # 10 秒滑动窗口 FPS 统计
+├── video_input.py        # 视频/相机/视频流统一输入
+└── demo.py               # Demo 可视化渲染（检测框+HUD）
+```
+
+### 跟踪与识别流程
+
+```
+新 track 出现 → 标记 pending → Agent 推理（VLM 识别弦号+描述）
+                                    │
+                    ┌───────────────┴───────────────┐
+                    │                               │
+              识别到弦号                       未识别到弦号
+                    │                               │
+            数据库精确匹配                    数据库语义检索
+                    │                               │
+              ┌─────┴─────┐                   ┌─────┴─────┐
+              │           │                   │           │
+           匹配成功    未匹配              匹配成功    未匹配
+              │           │                   │           │
+    (库内确定id：XXX) (未知id：XXX)   (库内确定id：XXX) (未知id：XXX)
+```
+
+后续帧：track ID 沿用已识别结果，不再调用 Agent。
+
 ## ⚙️ 配置说明
 
 ### 环境变量一览
@@ -435,10 +635,16 @@ pytest tests/test_database.py -v   # 指定文件
 | LLM 编排 | LangChain + LangGraph | ReAct Agent 模式 |
 | 向量库 | FAISS (faiss-cpu) | 语义检索索引 |
 | Embedding | OpenAI Embeddings API | 文本向量化 |
+| 视觉模型 | Qwen3.5 VLM (OpenAI API 兼容) | 船只图像弦号识别 |
+| 目标检测 | ultralytics YOLO | 船只检测 |
+| 跟踪 | ByteTrack (YOLO 内置) | 多目标跟踪 |
+| 视频处理 | OpenCV (cv2) | 视频读写、图像处理 |
+| 并发 | threading + queue.Queue | 级联/并发双模式推理 |
 | 配置 | pydantic-settings | 环境变量管理 |
 | 向量计算 | NumPy | 余弦相似度 |
+| HTTP | httpx | API 调用 |
 | CLI | Rich | 终端美化输出 |
-| 测试 | pytest | 单元测试 |
+| 测试 | pytest | 单元测试 + 并发压力测试 |
 
 ## 📝 开发指南
 
