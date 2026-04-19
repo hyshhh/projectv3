@@ -139,7 +139,7 @@ class ShipDatabase:
         if db_path:
             p = Path(db_path)
         else:
-            p = Path(__file__).resolve().parent / "data" / "ships.csv"
+            p = Path(__file__).resolve().parent.parent / "data" / "ships.csv"
 
         if not p.exists():
             p.parent.mkdir(parents=True, exist_ok=True)

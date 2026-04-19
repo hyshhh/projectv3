@@ -44,8 +44,8 @@ def build_tools(db: ShipDatabase) -> list:
         try:
             results = db.semantic_search_filtered(target_description)
             if not results:
-                # 阈值过滤无结果时，返回 Top-1 原始结果作为参考
-                raw = db.semantic_search(target_description, top_k=1)
+                # 阈值过滤无结果时，返回配置的 Top-K 原始结果作为参考
+                raw = db.semantic_search(target_description)
                 if raw:
                     return json.dumps(
                         {"note": "以下结果相似度较低，仅供参考", "results": raw},
