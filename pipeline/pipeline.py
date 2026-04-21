@@ -101,9 +101,10 @@ class ShipPipeline:
         self._agent_workers: list[threading.Thread] = []
         self._stop_event = threading.Event()
 
-        # Agent 运行链路日志
+        # Agent 运行链路日志（限制最大条数防内存泄漏）
         self._agent_trace: list[dict[str, Any]] = []
         self._trace_lock = threading.Lock()
+        self._max_trace_entries = 500
 
         logger.info(
             "ShipPipeline 初始化: mode=%s, max_concurrent=%d, max_queued=%d, process_every=%d, prompt=%s",
@@ -135,6 +136,9 @@ class ShipPipeline:
         }
         with self._trace_lock:
             self._agent_trace.append(entry)
+            # 超过上限时截断，保留最近一半
+            if len(self._agent_trace) > self._max_trace_entries:
+                self._agent_trace = self._agent_trace[-(self._max_trace_entries // 2):]
 
         logger.info(
             "[AgentTrace] %s | track=%d frame=%d | %s%s",
@@ -369,7 +373,7 @@ class ShipPipeline:
                 logger.warning("工作线程 %s 未在超时内退出", worker.name)
         self._agent_workers.clear()
 
-        # 排空剩余任务和结果
+        # workers 全部退出后再排空，避免竞态丢结果
         remaining_tasks = 0
         while not self._task_queue.empty():
             try:
@@ -488,6 +492,9 @@ class ShipPipeline:
 
                     last_detections = detections
                     total_detections += len(detections)
+                else:
+                    # 非处理帧清空旧检测，避免框漂移
+                    detections = last_detections
 
                     # 注册/更新 track
                     for det in detections:
