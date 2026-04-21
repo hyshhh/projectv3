@@ -137,10 +137,13 @@ class ShipHullAgent:
 
 
 _agent_instance: ShipHullAgent | None = None
+_agent_config_hash: int = 0
 
 
 def create_agent(config: dict[str, Any] | None = None) -> ShipHullAgent:
-    global _agent_instance
-    if _agent_instance is None or config is not None:
+    global _agent_instance, _agent_config_hash
+    config_hash = hash(str(config)) if config is not None else 0
+    if _agent_instance is None or config_hash != _agent_config_hash:
         _agent_instance = ShipHullAgent(config)
+        _agent_config_hash = config_hash
     return _agent_instance
