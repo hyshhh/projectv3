@@ -12,6 +12,7 @@ import json
 import logging
 import re
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -154,8 +155,8 @@ class AgentInference:
                 return {"hull_number": "", "description": content[:200]}
 
         return {
-            "hull_number": str(result.get("hull_number", "")).strip(),
-            "description": str(result.get("description", "")).strip(),
+            "hull_number": str(result.get("hull_number") or "").strip(),
+            "description": str(result.get("description") or "").strip(),
         }
 
     def infer_single(
@@ -176,91 +177,109 @@ class AgentInference:
             InferenceResult 包含 hull_number, description。
         """
         with self._semaphore:
-            try:
-                b64 = self._encode_image(crop)
-                prompt = self._get_prompt()
+            max_retries = 3
+            last_err: Exception | None = None
 
-                headers = {
-                    "Authorization": f"Bearer {self._api_key}",
-                    "Content-Type": "application/json",
-                }
+            for attempt in range(max_retries):
+                try:
+                    return self._infer_single_inner(crop, track_id, frame_id)
+                except (httpx.TimeoutException, httpx.NetworkError) as e:
+                    last_err = e
+                    wait = 2 ** attempt
+                    logger.warning(
+                        "推理网络错误 (track=%d, frame=%d): %s，%ds 后重试 (%d/%d)",
+                        track_id, frame_id, e, wait, attempt + 1, max_retries,
+                    )
+                    time.sleep(wait)
 
-                payload = {
-                    "model": self._model,
-                    "temperature": self._temperature,
-                    "messages": [
+            logger.error("推理失败，已重试 %d 次 (track=%d, frame=%d)", max_retries, track_id, frame_id)
+            return InferenceResult(
+                hull_number="", description="",
+                track_id=track_id, frame_id=frame_id,
+                error=str(last_err),
+            )
+
+    def _infer_single_inner(
+        self,
+        crop: np.ndarray,
+        track_id: int,
+        frame_id: int,
+    ) -> InferenceResult:
+        """单次推理内部实现（不含重试逻辑）。"""
+        b64 = self._encode_image(crop)
+        prompt = self._get_prompt()
+
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+
+        payload = {
+            "model": self._model,
+            "temperature": self._temperature,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
                         {
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": prompt},
-                                {
-                                    "type": "image_url",
-                                    "image_url": {
-                                        "url": f"data:image/jpeg;base64,{b64}"
-                                    },
-                                },
-                            ],
-                        }
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{b64}"
+                            },
+                        },
                     ],
                 }
+            ],
+        }
 
-                resp = httpx.post(
-                    self._api_url,
-                    headers=headers,
-                    json=payload,
-                    timeout=60,
-                )
+        resp = httpx.post(
+            self._api_url,
+            headers=headers,
+            json=payload,
+            timeout=60,
+        )
 
-                if not resp.is_success:
-                    err_msg = f"API 返回 {resp.status_code}: {resp.text[:300]}"
-                    logger.error("推理失败 (track=%d, frame=%d): %s", track_id, frame_id, err_msg)
-                    return InferenceResult(
-                        hull_number="",
-                        description="",
-                        track_id=track_id,
-                        frame_id=frame_id,
-                        error=err_msg,
-                    )
+        if not resp.is_success:
+            err_msg = f"API 返回 {resp.status_code}: {resp.text[:300]}"
+            logger.error("推理失败 (track=%d, frame=%d): %s", track_id, frame_id, err_msg)
+            return InferenceResult(
+                hull_number="",
+                description="",
+                track_id=track_id,
+                frame_id=frame_id,
+                error=err_msg,
+            )
 
-                try:
-                    data = resp.json()
-                    content = data["choices"][0]["message"]["content"]
-                except (json.JSONDecodeError, KeyError, IndexError) as e:
-                    err_msg = f"API 响应解析失败: {e}, 原始响应: {resp.text[:300]}"
-                    logger.error("推理失败 (track=%d, frame=%d): %s", track_id, frame_id, err_msg)
-                    return InferenceResult(
-                        hull_number="",
-                        description="",
-                        track_id=track_id,
-                        frame_id=frame_id,
-                        error=err_msg,
-                    )
+        try:
+            data = resp.json()
+            content = data["choices"][0]["message"]["content"]
+        except (json.JSONDecodeError, KeyError, IndexError) as e:
+            err_msg = f"API 响应解析失败: {e}, 原始响应: {resp.text[:300]}"
+            logger.error("推理失败 (track=%d, frame=%d): %s", track_id, frame_id, err_msg)
+            return InferenceResult(
+                hull_number="",
+                description="",
+                track_id=track_id,
+                frame_id=frame_id,
+                error=err_msg,
+            )
 
-                parsed = self._parse_response(content)
+        parsed = self._parse_response(content)
 
-                logger.info(
-                    "推理完成 (track=%d, frame=%d): 弦号=%s, 描述=%s",
-                    track_id, frame_id,
-                    parsed["hull_number"] or "(未识别)",
-                    parsed["description"][:50],
-                )
+        logger.info(
+            "推理完成 (track=%d, frame=%d): 弦号=%s, 描述=%s",
+            track_id, frame_id,
+            parsed["hull_number"] or "(未识别)",
+            parsed["description"][:50],
+        )
 
-                return InferenceResult(
-                    hull_number=parsed["hull_number"],
-                    description=parsed["description"],
-                    track_id=track_id,
-                    frame_id=frame_id,
-                )
-
-            except Exception as e:
-                logger.exception("推理异常 (track=%d, frame=%d)", track_id, frame_id)
-                return InferenceResult(
-                    hull_number="",
-                    description="",
-                    track_id=track_id,
-                    frame_id=frame_id,
-                    error=str(e),
-                )
+        return InferenceResult(
+            hull_number=parsed["hull_number"],
+            description=parsed["description"],
+            track_id=track_id,
+            frame_id=frame_id,
+        )
 
     def infer_batch_async(
         self,
