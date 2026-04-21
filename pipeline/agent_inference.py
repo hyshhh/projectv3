@@ -23,33 +23,27 @@ logger = logging.getLogger(__name__)
 
 # ── 提示词模板 ──────────────────────────────────
 
-DETAILED_PROMPT = """你是一个专业的船只识别专家。请仔细观察这张船只图片，完成以下任务：
+DETAILED_PROMPT = """你是船只弦号识别专家。你的核心任务是读取船体侧面的文字编号。
 
-1. 识别船身上标注的弦号（hull number），弦号通常是船体侧面的数字或字母编号
-2. 详细描述船只的外观特征，包括：
-   - 船体颜色
-   - 船型（客轮/货轮/军舰/渔船/游艇/集装箱船/油轮/科考船等）
-   - 大小特征（大型/中型/小型）
-   - 上层建筑特征（驾驶室位置、烟囱数量和颜色、甲板设备等）
-   - 船体特殊标志、涂装、LOGO等
+重要指令：
+- 不要评价图片质量（无论清晰还是模糊都不要提）
+- 不要说"看不清""质量低"等废话
+- 即使图片模糊，也必须尝试读取船体上的任何可见文字、数字、编号
+- 重点关注：船体侧面白色/黑色的编号区域、船尾文字、船名
 
-请以严格的 JSON 格式返回，包含以下字段：
+请返回以下 JSON（不要任何其他文字）：
 {{
-  "hull_number": "识别到的弦号文字（如果看不清则返回空字符串）",
-  "description": "对船只外观的详细中文描述"
-}}
+  "hull_number": "读到的弦号编号（如 0014、海巡123、A01 等，完全没有可见文字则返回空字符串）",
+  "description": "客观描述船只：船型+船体颜色+上层建筑颜色+特殊标志（不提图片质量）"
+}}"""
 
-只返回 JSON，不要任何其他文字。"""
+BRIEF_PROMPT = """识别船体上的弦号编号，不要评价图片质量。
 
-BRIEF_PROMPT = """观察这张船只图片，识别弦号并简要描述船只。
-
-返回 JSON 格式：
+返回 JSON（不要其他文字）：
 {{
-  "hull_number": "弦号（看不清则返回空字符串）",
-  "description": "简要描述（船型+颜色+主要特征，50字以内）"
-}}
-
-只返回 JSON。"""
+  "hull_number": "弦号编号（无则空字符串）",
+  "description": "简要描述：船型+颜色+主要特征（50字内，不提图片质量）"
+}}"""
 
 
 @dataclass
@@ -128,7 +122,7 @@ class AgentInference:
     @staticmethod
     def _encode_image(image: np.ndarray) -> str:
         """将 BGR 图像编码为 base64 字符串。"""
-        success, buf = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        success, buf = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 95])
         if not success:
             raise RuntimeError("图像编码失败")
         return base64.b64encode(buf.tobytes()).decode("utf-8")

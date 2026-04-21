@@ -164,14 +164,27 @@ class ShipDetector:
             # 获取置信度
             conf = float(boxes.conf[i].item())
 
-            # 裁剪图像区域（加一点 padding）
+            # 裁剪图像区域（加大 padding，确保船体文字可见）
             h, w = frame.shape[:2]
-            pad = 10
+            pad = 20
             cx1 = max(0, x1 - pad)
             cy1 = max(0, y1 - pad)
             cx2 = min(w, x2 + pad)
             cy2 = min(h, y2 + pad)
             crop = frame[cy1:cy2, cx1:cx2].copy()
+
+            # 跳过太小的 crop（<80px 侧文字基本看不清）
+            crop_h, crop_w = crop.shape[:2]
+            if crop_w < 80 or crop_h < 80:
+                logger.debug("跳过过小 crop: %dx%d (track=%d)", crop_w, crop_h, track_id)
+                continue
+
+            # 对小 crop 做超分辨率放大，提升文字可读性
+            if crop_w < 256 or crop_h < 256:
+                scale = max(256 / crop_w, 256 / crop_h, 1.0)
+                new_w = int(crop_w * scale)
+                new_h = int(crop_h * scale)
+                crop = cv2.resize(crop, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
 
             detections.append(Detection(
                 track_id=track_id,

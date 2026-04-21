@@ -69,10 +69,10 @@ pipeline:
   # 设为 null 则使用 ultralytics 内置默认值
   tracker_params:
     track_high_thresh: 0.5     # 高置信度阈值（首次匹配）
-    track_low_thresh: 0.1      # 低置信度阈值（二次匹配）
+    track_low_thresh: 0.05     # 低置信度阈值（二次匹配，降低以减少 track 碎片化）
     new_track_thresh: 0.6      # 新轨迹创建阈值
-    track_buffer: 30           # 丢失后保留帧数
-    match_thresh: 0.8          # 匹配 IoU 阈值
+    track_buffer: 90           # 丢失后保留帧数（增大以减少 track 碎片化）
+    match_thresh: 0.5          # 匹配 IoU 阈值（降低以更宽松匹配）
     # botsort 专用（bytetrack 忽略）
     # proximity_thresh: 0.5
     # appearance_thresh: 0.25

@@ -47,10 +47,10 @@ _DEFAULTS: dict[str, Any] = {
         "tracker": "bytetrack",
         "tracker_params": {
             "track_high_thresh": 0.5,
-            "track_low_thresh": 0.1,
+            "track_low_thresh": 0.05,
             "new_track_thresh": 0.6,
-            "track_buffer": 30,
-            "match_thresh": 0.8,
+            "track_buffer": 90,
+            "match_thresh": 0.5,
         },
         "detect_classes": [8],
         "max_stale_frames": 300,
