@@ -59,6 +59,33 @@ class ScreenshotSaver:
             self._output_dir, self._format, jpeg_quality,
         )
 
+    def save(
+        self,
+        frame: np.ndarray,
+        frame_id: int,
+    ) -> str | None:
+        """
+        直接保存截图（无触发条件判断）。
+
+        Args:
+            frame: 已渲染的 BGR 帧。
+            frame_id: 当前帧号，用于生成文件名。
+
+        Returns:
+            保存的文件路径，失败返回 None。
+        """
+        filename = f"frame_{frame_id:06d}{self._ext}"
+        filepath = self._output_dir / filename
+
+        success = cv2.imwrite(str(filepath), frame, self._encode_params)
+        if success:
+            self._saved_count += 1
+        else:
+            logger.error("截图保存失败: %s", filepath)
+            return None
+
+        return str(filepath)
+
     def save_if_triggered(
         self,
         frame: np.ndarray,
@@ -79,20 +106,7 @@ class ScreenshotSaver:
         if process_every_n <= 0 or frame_id % process_every_n != 0:
             return None
 
-        filename = f"frame_{frame_id:06d}{self._ext}"
-        filepath = self._output_dir / filename
-
-        success = cv2.imwrite(str(filepath), frame, self._encode_params)
-        if success:
-            self._saved_count += 1
-            logger.info(
-                "截图已保存: %s (第 %d 张)", filepath, self._saved_count,
-            )
-        else:
-            logger.error("截图保存失败: %s", filepath)
-            return None
-
-        return str(filepath)
+        return self.save(frame, frame_id)
 
     @property
     def saved_count(self) -> int:
