@@ -484,39 +484,32 @@ class ShipPipeline:
                 # FPS 统计
                 self._fps.tick("stream")
 
-                # 按 process_every_n_frames 决定是否处理
-                should_process = (frame_id % self._process_every_n == 0)
+                # ── 每帧都进行 YOLO 检测，保持 ByteTrack 连续 ──
+                try:
+                    detections = self._detector.detect(frame, frame_id)
+                except Exception as e:
+                    logger.error("YOLO 检测异常 (frame=%d): %s", frame_id, e)
+                    detections = []
 
-                if should_process:
-                    # YOLO 检测 + 跟踪
-                    try:
-                        detections = self._detector.detect(frame, frame_id)
-                    except Exception as e:
-                        logger.error("YOLO 检测异常 (frame=%d): %s", frame_id, e)
-                        detections = []
+                last_detections = detections
+                total_detections += len(detections)
 
-                    last_detections = detections
-                    total_detections += len(detections)
+                # 注册/更新 track
+                for det in detections:
+                    self._tracker.get_or_create(det.track_id, frame_id)
+
+                # Agent 推理（级联或并发）
+                if self._concurrent_mode:
+                    self._concurrent_process(detections, frame_id)
                 else:
-                    # 非处理帧清空旧检测，避免框漂移
-                    detections = last_detections
+                    self._cascade_process(detections, frame_id)
 
-                    # 注册/更新 track
-                    for det in detections:
-                        self._tracker.get_or_create(det.track_id, frame_id)
+                # 并发模式下排空已完成的结果
+                if self._concurrent_mode:
+                    self._drain_results()
 
-                    # Agent 推理（级联或并发）
-                    if self._concurrent_mode:
-                        self._concurrent_process(detections, frame_id)
-                    else:
-                        self._cascade_process(detections, frame_id)
-
-                    # 并发模式下排空已完成的结果
-                    if self._concurrent_mode:
-                        self._drain_results()
-
-                    # 清理过期 track
-                    self._tracker.cleanup_stale(frame_id)
+                # 清理过期 track
+                self._tracker.cleanup_stale(frame_id)
 
                 # 渲染输出
                 if self._demo_enabled or output_path or display:
@@ -525,7 +518,7 @@ class ShipPipeline:
                     display_frame = frame
 
                 # 当 process_every_n_frames 触发时，保存带检测框的截图到 output 目录
-                if should_process:
+                if frame_id % self._process_every_n == 0:
                     self._saver.save_if_triggered(
                         display_frame, frame_id, self._process_every_n,
                     )
