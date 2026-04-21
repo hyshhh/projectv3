@@ -71,6 +71,7 @@ class ShipPipeline:
             device=pipe_cfg.get("device", ""),
             conf_threshold=pipe_cfg.get("conf_threshold", 0.25),
             tracker_type=pipe_cfg.get("tracker", "bytetrack"),
+            tracker_params=pipe_cfg.get("tracker_params"),
             classes=pipe_cfg.get("detect_classes", [8]),  # COCO: 8=boat
         )
 

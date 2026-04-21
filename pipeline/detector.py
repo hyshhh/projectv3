@@ -2,16 +2,19 @@
 ShipDetector — 基于 YOLO 的船只检测与跟踪
 
 使用 ultralytics YOLO 原生追踪算法（ByteTrack），输出带 track ID 的检测框。
+支持从 config 传入自定义 tracker 参数，自动生成 tracker YAML。
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +26,36 @@ class Detection:
     bbox: tuple[int, int, int, int]  # (x1, y1, x2, y2)
     confidence: float
     crop: np.ndarray | None = None   # 裁剪的图像区域
+
+
+def _build_tracker_yaml(
+    tracker_type: str,
+    tracker_params: dict[str, Any] | None,
+) -> str:
+    """
+    根据 tracker_type 和自定义参数生成 tracker YAML。
+
+    如果 tracker_params 为 None 或空，直接返回 "{tracker_type}.yaml"
+    让 ultralytics 使用内置默认配置。
+
+    否则生成临时 YAML 文件并返回其路径。
+    """
+    if not tracker_params:
+        return f"{tracker_type}.yaml"
+
+    # 构建配置字典
+    cfg: dict[str, Any] = {"tracker_type": tracker_type}
+    cfg.update(tracker_params)
+
+    # 写入临时文件
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", prefix=f"{tracker_type}_", delete=False, encoding="utf-8"
+    )
+    yaml.dump(cfg, tmp, default_flow_style=False, allow_unicode=True)
+    tmp.close()
+
+    logger.info("生成 tracker 配置: %s (type=%s, params=%s)", tmp.name, tracker_type, list(tracker_params.keys()))
+    return tmp.name
 
 
 class ShipDetector:
@@ -39,6 +72,7 @@ class ShipDetector:
         device: str = "",
         conf_threshold: float = 0.25,
         tracker_type: str = "bytetrack",
+        tracker_params: dict[str, Any] | None = None,
         classes: list[int] | None = None,
     ):
         """
@@ -47,18 +81,22 @@ class ShipDetector:
             device: 推理设备，"" 自动选择，"cpu" 强制 CPU，"0" 表示 GPU 0。
             conf_threshold: 检测置信度阈值。
             tracker_type: 追踪算法，"bytetrack" 或 "botsort"。
+            tracker_params: 追踪器参数字典。None 使用 ultralytics 内置默认值。
             classes: 只检测指定类别 ID 列表。None 表示检测所有类别。
                      COCO 中船的类别 ID 是 8。
         """
         from ultralytics import YOLO
 
         self._conf_threshold = conf_threshold
-        self._tracker_type = tracker_type
         self._classes = classes
+        self._device = device
+
+        # 生成 tracker YAML
+        self._tracker_yaml = _build_tracker_yaml(tracker_type, tracker_params)
+        self._tracker_type = tracker_type
 
         logger.info("加载 YOLO 模型: %s (device=%s)", model_path, device or "auto")
         self._model = YOLO(model_path)
-        self._device = device
 
         # 预热（忽略结果）
         try:
@@ -66,14 +104,14 @@ class ShipDetector:
             self._model.track(
                 source=dummy,
                 persist=True,
-                tracker=f"{tracker_type}.yaml",
+                tracker=self._tracker_yaml,
                 verbose=False,
                 device=device or None,
             )
         except Exception as e:
             logger.warning("YOLO 预热失败（不影响后续使用）: %s", e)
 
-        logger.info("YOLO 模型加载完成，追踪器: %s", tracker_type)
+        logger.info("YOLO 模型加载完成，追踪器: %s (配置: %s)", tracker_type, self._tracker_yaml)
 
     def detect(
         self,
@@ -94,7 +132,7 @@ class ShipDetector:
             source=frame,
             persist=True,
             conf=self._conf_threshold,
-            tracker=f"{self._tracker_type}.yaml",
+            tracker=self._tracker_yaml,
             classes=self._classes,
             verbose=False,
             device=self._device or None,
