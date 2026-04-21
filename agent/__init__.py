@@ -1,7 +1,8 @@
-"""Agent 核心 — 构建与运行，带 few-shot 示例引导链路"""
+"""Agent 核心 — 构建与运行，三步链路：识别 → 精确查找 → 语义检索"""
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -17,64 +18,97 @@ logger = logging.getLogger(__name__)
 
 # ── System Prompt ──────────────────────────────
 
-SYSTEM_PROMPT = """你是船弦号识别助手。严格按以下流程工作：
+SYSTEM_PROMPT = """你是船弦号识别助手。严格按以下三步链路工作：
 
-【流程规则】
-1. 用户提供了弦号：
-   → 第一步：调用 lookup_by_hull_number 精确查找
-   → found=true：直接返回「识别结果：弦号 {hull_number}，描述：{description}」
-   → found=false：进入第二步
-   → 第二步：调用 retrieve_by_description 语义检索，用用户的完整描述作为查询
+【三步链路】
+1. 调用 recognize_ship 识别图像中的弦号和船只描述
+   → 有弦号：进入第二步
+   → 无弦号：跳过第二步，直接进入第三步
 
-2. 用户只提供了描述、没有弦号：
-   → 直接调用 retrieve_by_description，用用户的描述作为查询
+2. 调用 lookup_by_hull_number 精确查找（仅在有弦号时）
+   → found=true：直接返回「库内确定id：{hull_number}，描述：{description}」
+   → found=false：进入第三步
 
-3. 语义检索结果解读：
-   → 有结果：逐条列出所有返回的匹配结果，格式「{序号}. 弦号 {hull_number}，描述：{description}（相似度：{score}）」
-   → 无结果：返回「未找到匹配的船只信息」
+3. 调用 retrieve_by_description 语义检索
+   → 用 recognize_ship 返回的 description 作为查询
+   → 有结果：返回所有匹配「可能id：{弦号1}/{弦号2}/...」
+   → 无结果：返回「未识别」
 
 【禁止】
 - 不要编造弦号或描述
-- 不要跳过精确查找直接语义检索
-- 不要同时调用两个工具
+- 不要跳过任何步骤
+- 不要同时调用多个工具
+- recognize_ship 是第一步，必须先调用
 """
 
 # ── Few-shot 示例 ──────────────────────────────
 
 FEW_SHOT_EXAMPLES = [
-    HumanMessage(content="帮我查一下弦号0014是什么船"),
+    HumanMessage(content="请识别这张船只图像"),
     AIMessage(content="", tool_calls=[
-        {"id": "call_1", "name": "lookup_by_hull_number", "args": {"hull_number": "0014"}}
+        {"id": "call_1", "name": "recognize_ship", "args": {"image_base64": "<示例图像>"}}
+    ]),
+    ToolMessage(
+        content='{"hull_number": "0014", "description": "白色大型客轮，上层建筑为蓝色涂装"}',
+        tool_call_id="call_1",
+    ),
+    AIMessage(content="", tool_calls=[
+        {"id": "call_2", "name": "lookup_by_hull_number", "args": {"hull_number": "0014"}}
     ]),
     ToolMessage(
         content='{"found": true, "hull_number": "0014", "description": "白色大型客轮，上层建筑为蓝色涂装，船尾有直升机停机坪"}',
-        tool_call_id="call_1",
+        tool_call_id="call_2",
     ),
-    AIMessage(content="识别结果：弦号 0014，描述：白色大型客轮，上层建筑为蓝色涂装，船尾有直升机停机坪"),
+    AIMessage(content="库内确定id：0014，描述：白色大型客轮，上层建筑为蓝色涂装，船尾有直升机停机坪"),
 
-    HumanMessage(content="弦号9999，这是一艘大型白色邮轮，船身有蓝色条纹装饰，有三个烟囱"),
+    HumanMessage(content="请识别这张船只图像"),
     AIMessage(content="", tool_calls=[
-        {"id": "call_2", "name": "lookup_by_hull_number", "args": {"hull_number": "9999"}}
+        {"id": "call_3", "name": "recognize_ship", "args": {"image_base64": "<示例图像>"}}
+    ]),
+    ToolMessage(
+        content='{"hull_number": "9999", "description": "大型白色邮轮，船身有蓝色条纹装饰"}',
+        tool_call_id="call_3",
+    ),
+    AIMessage(content="", tool_calls=[
+        {"id": "call_4", "name": "lookup_by_hull_number", "args": {"hull_number": "9999"}}
     ]),
     ToolMessage(
         content='{"found": false, "hull_number": "9999"}',
-        tool_call_id="call_2",
+        tool_call_id="call_4",
     ),
     AIMessage(content="", tool_calls=[
-        {"id": "call_3", "name": "retrieve_by_description", "args": {
-            "target_description": "大型白色邮轮，船身有蓝色条纹装饰，有三个烟囱"
+        {"id": "call_5", "name": "retrieve_by_description", "args": {
+            "target_description": "大型白色邮轮，船身有蓝色条纹装饰"
         }}
     ]),
     ToolMessage(
-        content='{"results": [{"hull_number": "0123", "description": "白色邮轮，船身有红蓝条纹装饰，三座烟囱", "score": 0.9234}, {"hull_number": "0014", "description": "白色大型客轮，上层建筑为蓝色涂装，船尾有直升机停机坪", "score": 0.7521}, {"hull_number": "0789", "description": "白色科考船，船尾有A型吊架，甲板有多个实验室舱", "score": 0.6103}]}',
-        tool_call_id="call_3",
+        content='{"results": [{"hull_number": "0123", "description": "白色邮轮，船身有红蓝条纹装饰，三座烟囱", "score": 0.92}]}',
+        tool_call_id="call_5",
     ),
-    AIMessage(content="未找到对应弦号，根据描述检索到以下匹配结果：\n1. 弦号 0123，描述：白色邮轮，船身有红蓝条纹装饰，三座烟囱（相似度：0.9234）\n2. 弦号 0014，描述：白色大型客轮，上层建筑为蓝色涂装，船尾有直升机停机坪（相似度：0.7521）\n3. 弦号 0789，描述：白色科考船，船尾有A型吊架，甲板有多个实验室舱（相似度：0.6103）"),
+    AIMessage(content="识别到弦号9999，库内未找到，根据描述可能id：0123"),
 ]
 
 
+class AgentResult:
+    """Agent 运行结果，包含结构化信息供 pipeline 使用。"""
+
+    def __init__(
+        self,
+        hull_number: str = "",
+        description: str = "",
+        match_type: str = "none",
+        semantic_match_ids: list[str] | None = None,
+        answer: str = "",
+    ):
+        self.hull_number = hull_number
+        self.description = description
+        self.match_type = match_type        # "exact" | "semantic" | "none"
+        self.semantic_match_ids = semantic_match_ids or []
+        self.answer = answer
+
+
 class ShipHullAgent:
-    """船弦号识别 Agent 封装。"""
+    """船弦号识别 Agent 封装。三步链路：recognize_ship → lookup → retrieve。"""
 
     def __init__(self, config: dict[str, Any] | None = None):
         self.config = config or load_config()
@@ -104,16 +138,74 @@ class ShipHullAgent:
         )
 
     def run(self, query: str) -> str:
-        logger.info("收到查询: %s", query)
+        """运行 Agent，返回自然语言回答。"""
+        logger.info("收到查询: %s", query[:100])
         try:
             messages = FEW_SHOT_EXAMPLES + [HumanMessage(content=query)]
             result = self._agent.invoke({"messages": messages})
             answer = result["messages"][-1].content
-            logger.info("回答: %s", answer)
+            logger.info("回答: %s", answer[:100])
             return answer
         except Exception as e:
             logger.exception("Agent 执行失败")
             return f"查询执行失败: {e}"
+
+    def run_with_result(self, query: str) -> AgentResult:
+        """运行 Agent，返回结构化结果（供 pipeline 使用）。"""
+        try:
+            messages = FEW_SHOT_EXAMPLES + [HumanMessage(content=query)]
+            result = self._agent.invoke({"messages": messages})
+            return self._parse_result(result)
+        except Exception as e:
+            logger.exception("Agent 执行失败")
+            return AgentResult(answer=f"Agent 执行失败: {e}")
+
+    @staticmethod
+    def _parse_result(result: dict) -> AgentResult:
+        """从 Agent 消息历史中提取结构化结果。"""
+        msgs = result.get("messages", [])
+        hull_number = ""
+        description = ""
+        match_type = "none"
+        semantic_match_ids: list[str] = []
+        answer = msgs[-1].content if msgs else ""
+
+        for msg in msgs:
+            if not isinstance(msg, ToolMessage):
+                continue
+            try:
+                data = json.loads(msg.content)
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+            # recognize_ship 结果
+            if "hull_number" in data and "description" in data and "found" not in data and "results" not in data:
+                hull_number = data.get("hull_number", "")
+                description = data.get("description", "")
+
+            # lookup_by_hull_number 精确匹配
+            if data.get("found") is True:
+                match_type = "exact"
+                hull_number = data.get("hull_number", hull_number)
+                description = data.get("description", description)
+
+            # retrieve_by_description 语义匹配
+            if "results" in data:
+                results = data["results"]
+                if results:
+                    semantic_match_ids = [
+                        r.get("hull_number", "") for r in results if r.get("hull_number")
+                    ]
+                    if match_type != "exact":
+                        match_type = "semantic"
+
+        return AgentResult(
+            hull_number=hull_number,
+            description=description,
+            match_type=match_type,
+            semantic_match_ids=semantic_match_ids,
+            answer=answer,
+        )
 
     def run_verbose(self, query: str) -> list[dict]:
         try:
