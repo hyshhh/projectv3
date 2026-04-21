@@ -519,14 +519,8 @@ class ShipPipeline:
 
                 # ── process_every_n_frames 控制 Agent 推理频率 ──
                 should_process = (frame_id % self._process_every_n == 0)
-                new_recognized = False
 
                 if should_process:
-                    # 记录当前已识别的 track ID 集合
-                    prev_recognized = {
-                        tid for tid, t in self._tracker.active_tracks.items() if t.recognized
-                    }
-
                     # Agent 推理（级联或并发）
                     if self._concurrent_mode:
                         self._concurrent_process(detections, frame_id)
@@ -537,12 +531,6 @@ class ShipPipeline:
                     if self._concurrent_mode:
                         self._drain_results()
 
-                    # 检查是否有新 track 被识别出弦号
-                    for tid, t in self._tracker.active_tracks.items():
-                        if t.recognized and tid not in prev_recognized and t.hull_number:
-                            new_recognized = True
-                            break
-
                 # 清理过期 track
                 self._tracker.cleanup_stale(frame_id)
 
@@ -552,9 +540,13 @@ class ShipPipeline:
                 else:
                     display_frame = frame
 
-                # Agent 识别到弦号时保存截图
-                if new_recognized:
-                    self._saver.save(display_frame, frame_id)
+                # 每 N 帧：有已识别的 track 就保存截图
+                if should_process:
+                    has_recognized = any(
+                        t.hull_number for t in self._tracker.active_tracks.values() if t.recognized
+                    )
+                    if has_recognized:
+                        self._saver.save(display_frame, frame_id)
 
                 # 写入输出视频
                 if video_writer:
