@@ -102,6 +102,10 @@ class ShipDetector:
         logger.info("加载 YOLO 模型: %s (device=%s)", model_path, device or "auto")
         self._model = YOLO(model_path)
 
+        # 兼容性修复：部分 ultralytics 版本 default.yaml 缺少 fuse_score 字段
+        # 动态修补 ultralytics 内部配置类，注入缺失的属性
+        self._patch_ultralytics_cfg()
+
         # 预热（忽略结果）
         try:
             dummy = np.zeros((640, 640, 3), dtype=np.uint8)
@@ -223,6 +227,31 @@ class ShipDetector:
             except Exception:
                 pass
             self._tracker_tmp_file = None
+
+    @staticmethod
+    def _patch_ultralytics_cfg() -> None:
+        """
+        修补 ultralytics 配置类，注入可能缺失的 fuse_score 属性。
+        
+        某些 ultralytics 版本的代码引用了 fuse_score，但 default.yaml 未更新，
+        导致 IterableSimpleNamespace 缺少该属性而崩溃。
+        """
+        try:
+            from ultralytics.cfg import IterableSimpleNamespace
+            _orig_init = IterableSimpleNamespace.__init__
+
+            def _patched_init(self, *args, **kwargs):
+                _orig_init(self, *args, **kwargs)
+                if not hasattr(self, "fuse_score"):
+                    self.fuse_score = False
+
+            # 只补一次，避免重复 patch
+            if not getattr(IterableSimpleNamespace.__init__, "_fuse_score_patched", False):
+                IterableSimpleNamespace.__init__ = _patched_init
+                IterableSimpleNamespace.__init__._fuse_score_patched = True
+                logger.info("已修补 ultralytics IterableSimpleNamespace（注入 fuse_score=False）")
+        except Exception as e:
+            logger.debug("ultralytics 配置修补跳过: %s", e)
 
     def __del__(self) -> None:
         self.cleanup()
