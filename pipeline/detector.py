@@ -111,7 +111,6 @@ class ShipDetector:
                 tracker=self._tracker_yaml,
                 verbose=False,
                 device=device or None,
-                fuse_score=False,
             )
         except Exception as e:
             logger.warning("YOLO 预热失败（不影响后续使用）: %s", e)
@@ -142,18 +141,7 @@ class ShipDetector:
                 classes=self._classes,
                 verbose=False,
                 device=self._device or None,
-                fuse_score=False,
             )
-        except AttributeError as e:
-            # ultralytics 版本与 default.yaml 不兼容时的常见错误
-            if "fuse_score" in str(e):
-                logger.warning(
-                    "YOLO default.yaml 过期（缺少 fuse_score），"
-                    "请运行: pip install -U ultralytics 或替换 default.yaml"
-                )
-            else:
-                logger.error("YOLO 检测异常 (frame=%d): %s", frame_id, e)
-            return []
         except Exception as e:
             logger.error("YOLO 检测异常 (frame=%d): %s", frame_id, e)
             return []
