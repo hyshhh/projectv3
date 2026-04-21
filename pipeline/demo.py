@@ -12,12 +12,52 @@ Demo 模块 — 视频演示可视化
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 import cv2
 import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 
 logger = logging.getLogger(__name__)
+
+# 中文字体路径（按优先级尝试）
+_CJK_FONT_CANDIDATES = [
+    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+]
+
+
+def _load_cjk_font(size: int) -> ImageFont.FreeTypeFont:
+    """加载中文字体，找不到则回退到 PIL 默认字体。"""
+    for path in _CJK_FONT_CANDIDATES:
+        if Path(path).exists():
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception:
+                continue
+    logger.warning("未找到中文字体，将使用 PIL 默认字体（中文可能仍显示异常）")
+    return ImageFont.load_default()
+
+
+def _pil_put_text(
+    img: np.ndarray,
+    text: str,
+    x: int,
+    y: int,
+    font: ImageFont.FreeTypeFont,
+    fill: tuple[int, int, int] = (255, 255, 255),
+) -> tuple[int, int]:
+    """用 PIL 在 numpy 图像上绘制中文文字。返回 (text_width, text_height)。"""
+    pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(pil_img)
+    bbox = draw.textbbox((x, y), text, font=font)
+    tw = bbox[2] - bbox[0]
+    th = bbox[3] - bbox[1]
+    draw.text((x, y), text, font=font, fill=fill)
+    img[:] = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+    return tw, th
 
 
 class DemoRenderer:
@@ -41,6 +81,10 @@ class DemoRenderer:
         self._show_confidence = show_confidence
         self._font_scale = font_scale
         self._paused = False
+
+        # 中文字体（PIL 渲染，解决 OpenCV 不支持中文的问题）
+        pil_size = max(12, int(font_scale * 32))
+        self._cjk_font = _load_cjk_font(pil_size)
 
     @property
     def paused(self) -> bool:
@@ -174,25 +218,25 @@ class DemoRenderer:
         y: int,
         color: tuple[int, int, int],
     ) -> None:
-        """在检测框下方渲染带背景的文字标签。"""
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        scale = self._font_scale
-        thickness = 1
+        """在检测框下方渲染带背景的文字标签（PIL 渲染中文）。"""
+        pil_img = Image.fromarray(np.zeros((1, 1, 3), dtype=np.uint8))
+        draw = ImageDraw.Draw(pil_img)
+        bbox = draw.textbbox((0, 0), text, font=self._cjk_font)
+        tw = bbox[2] - bbox[0]
+        th = bbox[3] - bbox[1]
+        baseline = 4
 
-        (tw, th), baseline = cv2.getTextSize(text, font, scale, thickness)
-
-        # 背景
         cv2.rectangle(
             canvas,
             (x, y + 2),
             (x + tw + 6, y + th + baseline + 6),
             color, -1,
         )
-        # 文字（白色）
-        cv2.putText(
+        _pil_put_text(
             canvas, text,
-            (x + 3, y + th + 4),
-            font, scale, (255, 255, 255), thickness,
+            x + 3, y + 4,
+            self._cjk_font,
+            fill=(255, 255, 255),
         )
 
     def _render_hud(
