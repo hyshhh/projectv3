@@ -168,9 +168,9 @@ class DemoRenderer:
         if track_info and track_info.db_matched:
             color = (0, 200, 0)       # 绿色：精确匹配库内弦号
         elif track_info and track_info.recognized and track_info.hull_number:
-            color = (0, 215, 255)     # 黄色：识别到弦号但未精确匹配
-        elif track_info and track_info.recognized and track_info.semantic_match_ids:
-            color = (0, 0, 255)       # 红色：未识别到弦号，但描述语义匹配到候选
+            color = (0, 215, 255)     # 黄色：识别到弦号但未精确匹配库内
+        elif track_info and track_info.recognized and not track_info.hull_number and track_info.semantic_match_ids:
+            color = (0, 0, 255)       # 红色：未识别到弦号，通过描述语义匹配到候选
         elif track_info and track_info.pending:
             color = (255, 255, 0)     # 青色：识别中
         else:

@@ -57,10 +57,8 @@ class ShipPipeline:
         # 读取 pipeline 相关配置
         pipe_cfg = config.get("pipeline", {})
         self._concurrent_mode: bool = pipe_cfg.get("concurrent_mode", False)
-        self._max_concurrent: int = pipe_cfg.get("max_concurrent", 4)
         self._max_queued_frames: int = pipe_cfg.get("max_queued_frames", 30)
         self._process_every_n: int = max(1, pipe_cfg.get("process_every_n_frames", 1))
-        self._prompt_mode: str = pipe_cfg.get("prompt_mode", "detailed")
         self._demo_enabled: bool = pipe_cfg.get("demo", False)
 
         # 读取 Agent 数据库配置
@@ -107,12 +105,9 @@ class ShipPipeline:
         self._max_trace_entries = 500
 
         logger.info(
-            "ShipPipeline 初始化: mode=%s, max_concurrent=%d, max_queued=%d, process_every=%d, prompt=%s",
+            "ShipPipeline 初始化: mode=%s, process_every=%d",
             "concurrent" if self._concurrent_mode else "cascade",
-            self._max_concurrent,
-            self._max_queued_frames,
             self._process_every_n,
-            self._prompt_mode,
         )
 
     # ── Agent 链路日志 ──────────────────────────
@@ -158,6 +153,50 @@ class ShipPipeline:
         if not success:
             raise RuntimeError("图像编码失败")
         return base64.b64encode(buf.tobytes()).decode("utf-8")
+
+    def _run_three_step_chain(self, crop: np.ndarray) -> AgentResult:
+        """
+        执行三步链路：VLM识别 → 精确查找 → 语义检索。
+
+        第1步: _vlm_infer(crop) → 弦号 + 描述
+        第2步: db.lookup(hull_number) → 有弦号时精确查找
+        第3步: db.semantic_search_filtered(description) → 弦号未匹配或无弦号时语义检索
+        """
+        from tools import _vlm_infer
+
+        # 第一步：VLM 识别
+        crop_b64 = self._encode_image(crop)
+        vlm_result = _vlm_infer(crop_b64)
+        hull_number = vlm_result.get("hull_number", "")
+        description = vlm_result.get("description", "")
+
+        if not hull_number and not description:
+            return AgentResult(answer="VLM 未返回结果")
+
+        # 第二步：精确查找（有弦号时）
+        exact_matched = False
+        semantic_ids: list[str] = []
+
+        if hull_number:
+            desc_in_db = self._db.lookup(hull_number)
+            if desc_in_db is not None:
+                exact_matched = True
+                description = description or desc_in_db
+            elif description:
+                # 第三步：语义检索（弦号未匹配时，用描述检索）
+                results = self._db.semantic_search_filtered(description)
+                semantic_ids = [r["hull_number"] for r in results if r.get("hull_number")]
+        elif description:
+            # 无弦号，直接第三步：语义检索
+            results = self._db.semantic_search_filtered(description)
+            semantic_ids = [r["hull_number"] for r in results if r.get("hull_number")]
+
+        return AgentResult(
+            hull_number=hull_number,
+            description=description,
+            match_type="exact" if exact_matched else ("semantic" if semantic_ids else "none"),
+            semantic_match_ids=semantic_ids,
+        )
 
     # ── 推理结果处理 ────────────────────────────
 
@@ -229,55 +268,17 @@ class ShipPipeline:
             )
 
             try:
-                # 第一步：VLM 识别
-                crop_b64 = self._encode_image(det.crop)
-                from tools import _vlm_infer
-                vlm_result = _vlm_infer(crop_b64)
-                hull_number = vlm_result.get("hull_number", "")
-                description = vlm_result.get("description", "")
-
-                if not hull_number and not description:
-                    self._handle_agent_error(det.track_id, frame_id, "VLM 未返回结果")
-                    continue
-
-                # 第二步：精确查找（有弦号时）
-                exact_matched = False
-                semantic_ids: list[str] = []
-
-                if hull_number:
-                    desc_in_db = self._db.lookup(hull_number)
-                    if desc_in_db is not None:
-                        exact_matched = True
-                        description = description or desc_in_db
-                    else:
-                        # 第三步：语义检索（弦号未匹配时，用描述检索）
-                        if description:
-                            results = self._db.semantic_search_filtered(description)
-                            semantic_ids = [r["hull_number"] for r in results if r.get("hull_number")]
-                elif description:
-                    # 无弦号，直接第三步：语义检索
-                    results = self._db.semantic_search_filtered(description)
-                    semantic_ids = [r["hull_number"] for r in results if r.get("hull_number")]
-
-                # 构造结果
-                agent_result = AgentResult(
-                    hull_number=hull_number,
-                    description=description,
-                    match_type="exact" if exact_matched else ("semantic" if semantic_ids else "none"),
-                    semantic_match_ids=semantic_ids,
-                )
-
+                agent_result = self._run_three_step_chain(det.crop)
                 self._log_agent_trace(
                     "three_step_chain",
                     track_id=det.track_id,
                     frame_id=frame_id,
                     content=(
-                        f"step1: 弦号={hull_number or '(无)'} 描述={description[:30]} | "
-                        f"step2: 精确={'✓' if exact_matched else '✗'} | "
-                        f"step3: 语义候选={semantic_ids}"
+                        f"弦号={agent_result.hull_number or '(无)'} "
+                        f"匹配={agent_result.match_type} "
+                        f"语义候选={agent_result.semantic_match_ids}"
                     ),
                 )
-
                 self._handle_agent_result(det.track_id, frame_id, agent_result)
             except Exception as e:
                 self._handle_agent_error(det.track_id, frame_id, str(e))
@@ -343,49 +344,11 @@ class ShipPipeline:
             )
 
             try:
-                # 第一步：VLM 识别
-                crop_b64 = self._encode_image(crop)
-                from tools import _vlm_infer
-                vlm_result = _vlm_infer(crop_b64)
-                hull_number = vlm_result.get("hull_number", "")
-                description = vlm_result.get("description", "")
-
-                if not hull_number and not description:
-                    agent_result = AgentResult(answer="VLM 未返回结果")
-                    self._result_queue.put({
-                        "frame_id": frame_id, "track_id": track_id, "agent_result": agent_result,
-                    })
-                    continue
-
-                # 第二步：精确查找（有弦号时）
-                exact_matched = False
-                semantic_ids: list[str] = []
-
-                if hull_number:
-                    desc_in_db = self._db.lookup(hull_number)
-                    if desc_in_db is not None:
-                        exact_matched = True
-                        description = description or desc_in_db
-                    else:
-                        # 第三步：语义检索
-                        if description:
-                            results = self._db.semantic_search_filtered(description)
-                            semantic_ids = [r["hull_number"] for r in results if r.get("hull_number")]
-                elif description:
-                    results = self._db.semantic_search_filtered(description)
-                    semantic_ids = [r["hull_number"] for r in results if r.get("hull_number")]
-
-                agent_result = AgentResult(
-                    hull_number=hull_number,
-                    description=description,
-                    match_type="exact" if exact_matched else ("semantic" if semantic_ids else "none"),
-                    semantic_match_ids=semantic_ids,
-                )
+                agent_result = self._run_three_step_chain(crop)
             except Exception as e:
                 logger.exception("Agent 推理异常 (track=%d, frame=%d)", track_id, frame_id)
                 agent_result = AgentResult(answer=str(e))
 
-            # 将结果放入结果队列
             self._result_queue.put({
                 "frame_id": frame_id,
                 "track_id": track_id,
@@ -608,8 +571,6 @@ class ShipPipeline:
                     if key == ord("q"):
                         logger.info("用户按下 q，停止处理")
                         break
-                    elif key == ord("d"):
-                        logger.info("提示词模式已由三步链路内部管理")
 
                 # 处理 FPS
                 self._fps.tick("process")
@@ -714,10 +675,6 @@ class ShipPipeline:
         """设置 demo 开关。"""
         self._demo_enabled = enabled
         logger.info("Demo 模式: %s", "开启" if enabled else "关闭")
-
-    def set_prompt_mode(self, mode: str) -> None:
-        """切换提示词模式（已由三步链路内部管理）。"""
-        self._prompt_mode = mode
 
     def switch_to_concurrent(self, enabled: bool) -> None:
         """动态切换级联/并发模式。"""
