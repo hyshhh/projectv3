@@ -156,30 +156,31 @@ class ShipPipeline:
 
     # ── 数据库查找 ──────────────────────────────
 
-    def _db_lookup(self, hull_number: str, description: str) -> tuple[str, str, bool]:
+    def _db_lookup(self, hull_number: str, description: str) -> tuple[bool, list[str]]:
         """
         在数据库中查找匹配的弦号或描述。
 
         Returns:
-            (match_id, match_desc, matched)
+            (exact_matched, semantic_match_ids)
+            - exact_matched: hull_number 精确匹配到库内记录
+            - semantic_match_ids: 语义检索匹配到的弦号列表（精确匹配时为空）
         """
         # 优先精确弦号匹配
         if hull_number:
             desc = self._db.lookup(hull_number)
             if desc is not None:
-                return hull_number, desc, True
+                return True, []
 
-        # 语义检索
+        # 语义检索（返回多个候选）
+        semantic_ids: list[str] = []
         if description:
             try:
                 results = self._db.semantic_search_filtered(description)
-                if results:
-                    best = results[0]
-                    return best["hull_number"], best["description"], True
+                semantic_ids = [r["hull_number"] for r in results if r.get("hull_number")]
             except Exception as e:
                 logger.warning("语义检索异常: %s", e)
 
-        return "", "", False
+        return False, semantic_ids
 
     # ── 推理结果处理 ────────────────────────────
 
@@ -209,17 +210,28 @@ class ShipPipeline:
         )
 
         # 查询数据库
-        match_id, match_desc, matched = self._db_lookup(
+        exact_matched, semantic_ids = self._db_lookup(
             result.hull_number, result.description
         )
 
-        if matched:
-            self._tracker.bind_db_match(result.track_id, match_id, match_desc)
+        if exact_matched:
+            # 精确匹配 → 绿色
+            desc = self._db.lookup(result.hull_number) or ""
+            self._tracker.bind_db_match(result.track_id, result.hull_number, desc)
             self._log_agent_trace(
-                "db_match",
+                "db_exact_match",
                 track_id=result.track_id,
                 frame_id=result.frame_id,
-                content=f"库内确定id：{match_id}",
+                content=f"库内确定id：{result.hull_number}",
+            )
+        elif semantic_ids:
+            # 有语义匹配候选 → 黄色或红色
+            self._tracker.bind_semantic_matches(result.track_id, semantic_ids)
+            self._log_agent_trace(
+                "db_semantic_match",
+                track_id=result.track_id,
+                frame_id=result.frame_id,
+                content=f"语义匹配候选：{semantic_ids}",
             )
         else:
             self._log_agent_trace(

@@ -166,9 +166,11 @@ class DemoRenderer:
 
         # 颜色映射
         if track_info and track_info.db_matched:
-            color = (0, 200, 0)       # 绿色：库内确定
-        elif track_info and track_info.recognized:
-            color = (0, 165, 255)     # 橙色：已识别未匹配
+            color = (0, 200, 0)       # 绿色：精确匹配库内弦号
+        elif track_info and track_info.recognized and track_info.hull_number:
+            color = (0, 215, 255)     # 黄色：识别到弦号但未精确匹配
+        elif track_info and track_info.recognized and track_info.semantic_match_ids:
+            color = (0, 0, 255)       # 红色：未识别到弦号，但描述语义匹配到候选
         elif track_info and track_info.pending:
             color = (255, 255, 0)     # 青色：识别中
         else:
@@ -201,14 +203,31 @@ class DemoRenderer:
         if not getattr(track_info, "recognized", False):
             return "(识别中...)" if getattr(track_info, "pending", False) else ""
 
+        # 绿色：精确匹配库内
         if getattr(track_info, "db_matched", False):
             return f"(库内确定id：{getattr(track_info, 'db_match_id', '')})"
 
-        label = getattr(track_info, "hull_number", "") or "未知"
+        hull_number = getattr(track_info, "hull_number", "") or ""
+        semantic_ids = getattr(track_info, "semantic_match_ids", []) or []
         desc = getattr(track_info, "description", "")[:15]
-        if desc:
-            return f"(未知id：{label} - {desc})"
-        return f"(未知id：{label})"
+
+        # 黄色：识别到弦号 + 有语义匹配候选
+        if hull_number and semantic_ids:
+            candidates = "/".join(semantic_ids[:3])
+            return f"(识别：{hull_number} 可能：{candidates})"
+
+        # 黄色：识别到弦号但无匹配
+        if hull_number:
+            if desc:
+                return f"(识别：{hull_number} - {desc})"
+            return f"(识别：{hull_number})"
+
+        # 红色：未识别到弦号，通过描述语义匹配
+        if semantic_ids:
+            candidates = "/".join(semantic_ids[:3])
+            return f"(可能：{candidates})"
+
+        return "(未知)"
 
     def _render_label(
         self,

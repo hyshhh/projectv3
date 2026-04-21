@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, field
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,8 @@ class TrackInfo:
     last_seen_frame: int = 0       # 最近一次出现的帧号
     db_match_id: str = ""          # 数据库匹配到的弦号（确认后）
     db_match_desc: str = ""        # 数据库匹配到的描述
-    db_matched: bool = False       # 是否在数据库中匹配到
+    db_matched: bool = False       # 是否在数据库中精确匹配到
+    semantic_match_ids: list[str] = field(default_factory=list)  # 语义检索匹配到的弦号列表
 
 
 class TrackManager:
@@ -123,13 +124,23 @@ class TrackManager:
         db_match_id: str,
         db_match_desc: str,
     ) -> None:
-        """绑定数据库匹配结果。"""
+        """绑定数据库精确匹配结果。"""
         with self._lock:
             if track_id in self._tracks:
                 info = self._tracks[track_id]
                 info.db_match_id = db_match_id
                 info.db_match_desc = db_match_desc
                 info.db_matched = True
+
+    def bind_semantic_matches(
+        self,
+        track_id: int,
+        match_ids: list[str],
+    ) -> None:
+        """绑定语义检索匹配结果（非精确匹配时的候选列表）。"""
+        with self._lock:
+            if track_id in self._tracks:
+                self._tracks[track_id].semantic_match_ids = match_ids
 
     def get_display_text(self, track_id: int) -> str:
         """
