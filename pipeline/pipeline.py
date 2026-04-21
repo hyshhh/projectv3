@@ -484,7 +484,7 @@ class ShipPipeline:
                 # FPS 统计
                 self._fps.tick("stream")
 
-                # ── 每帧都进行 YOLO 检测，保持 ByteTrack 连续 ──
+                # ── 每帧都进行 YOLO 检测 + track 注册，保持 ByteTrack 连续 ──
                 try:
                     detections = self._detector.detect(frame, frame_id)
                 except Exception as e:
@@ -494,19 +494,23 @@ class ShipPipeline:
                 last_detections = detections
                 total_detections += len(detections)
 
-                # 注册/更新 track
+                # 注册/更新 track（每帧执行，保持跟踪状态）
                 for det in detections:
                     self._tracker.get_or_create(det.track_id, frame_id)
 
-                # Agent 推理（级联或并发）
-                if self._concurrent_mode:
-                    self._concurrent_process(detections, frame_id)
-                else:
-                    self._cascade_process(detections, frame_id)
+                # ── process_every_n_frames 控制 Agent 推理 + 截图频率 ──
+                should_process = (frame_id % self._process_every_n == 0)
 
-                # 并发模式下排空已完成的结果
-                if self._concurrent_mode:
-                    self._drain_results()
+                if should_process:
+                    # Agent 推理（级联或并发）
+                    if self._concurrent_mode:
+                        self._concurrent_process(detections, frame_id)
+                    else:
+                        self._cascade_process(detections, frame_id)
+
+                    # 并发模式下排空已完成的结果
+                    if self._concurrent_mode:
+                        self._drain_results()
 
                 # 清理过期 track
                 self._tracker.cleanup_stale(frame_id)
@@ -518,7 +522,7 @@ class ShipPipeline:
                     display_frame = frame
 
                 # 当 process_every_n_frames 触发时，保存带检测框的截图到 output 目录
-                if frame_id % self._process_every_n == 0:
+                if should_process:
                     self._saver.save_if_triggered(
                         display_frame, frame_id, self._process_every_n,
                     )
