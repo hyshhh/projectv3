@@ -45,7 +45,10 @@ pipeline:
   max_queued_frames: 30
 
   # 每 N 帧处理一次（1 = 每帧都处理）
-  process_every_n_frames: 1
+  process_every_n_frames: 30
+
+  # 截图保存目录（每 N 帧触发时保存带检测框的渲染帧）
+  output_dir: "./output"
 
   # 提示词模式："detailed"（详细）或 "brief"（简略）
   prompt_mode: "detailed"

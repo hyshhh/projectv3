@@ -27,6 +27,7 @@ import numpy as np
 from pipeline.agent_inference import AgentInference, InferenceResult
 from pipeline.detector import ShipDetector, Detection
 from pipeline.demo import DemoRenderer
+from pipeline.output import ScreenshotSaver
 from pipeline.fps import FPSMeter
 from pipeline.tracker import TrackManager
 from pipeline.video_input import InputSource
@@ -92,6 +93,10 @@ class ShipPipeline:
             show_fps=True,
             show_track_id=True,
         )
+
+        # 截图保存器
+        output_dir = pipe_cfg.get("output_dir", "./output")
+        self._saver = ScreenshotSaver(output_dir=output_dir)
 
         # 并发模式相关
         self._task_queue: queue.Queue = queue.Queue(
@@ -519,6 +524,12 @@ class ShipPipeline:
                 else:
                     display_frame = frame
 
+                # 当 process_every_n_frames 触发时，保存带检测框的截图到 output 目录
+                if should_process:
+                    self._saver.save_if_triggered(
+                        display_frame, frame_id, self._process_every_n,
+                    )
+
                 # 写入输出视频
                 if video_writer:
                     video_writer.write(display_frame)
@@ -573,6 +584,7 @@ class ShipPipeline:
                 "elapsed_seconds": round(elapsed, 1),
                 "avg_fps": round(frame_id / elapsed, 1) if elapsed > 0 else 0,
                 "mode": "concurrent" if self._concurrent_mode else "cascade",
+                "screenshots_saved": self._saver.saved_count,
             }
 
             logger.info("=" * 50)

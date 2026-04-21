@@ -17,6 +17,7 @@ from pipeline.pipeline import ShipPipeline  # noqa: F401
 from pipeline.fps import FPSMeter  # noqa: F401
 from pipeline.video_input import InputSource  # noqa: F401
 from pipeline.demo import DemoRenderer  # noqa: F401
+from pipeline.output import ScreenshotSaver  # noqa: F401
 
 __all__ = [
     "ShipDetector",
@@ -26,4 +27,5 @@ __all__ = [
     "FPSMeter",
     "InputSource",
     "DemoRenderer",
+    "ScreenshotSaver",
 ]

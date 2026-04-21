@@ -6,3 +6,4 @@ dist/
 .env
 vector_store/
 .db_hash
+output/
