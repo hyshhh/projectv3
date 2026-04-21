@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import cv2
 import numpy as np
 import yaml
 
@@ -94,6 +95,9 @@ class ShipDetector:
         # 生成 tracker YAML
         self._tracker_yaml = _build_tracker_yaml(tracker_type, tracker_params)
         self._tracker_type = tracker_type
+        self._tracker_tmp_file: str | None = (
+            self._tracker_yaml if self._tracker_yaml != f"{tracker_type}.yaml" else None
+        )
 
         logger.info("加载 YOLO 模型: %s (device=%s)", model_path, device or "auto")
         self._model = YOLO(model_path)
@@ -206,3 +210,15 @@ class ShipDetector:
     @property
     def model(self):
         return self._model
+
+    def cleanup(self) -> None:
+        """清理临时文件。"""
+        if self._tracker_tmp_file:
+            try:
+                Path(self._tracker_tmp_file).unlink(missing_ok=True)
+            except Exception:
+                pass
+            self._tracker_tmp_file = None
+
+    def __del__(self) -> None:
+        self.cleanup()
