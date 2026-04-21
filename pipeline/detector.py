@@ -111,6 +111,7 @@ class ShipDetector:
                 tracker=self._tracker_yaml,
                 verbose=False,
                 device=device or None,
+                fuse_score=False,
             )
         except Exception as e:
             logger.warning("YOLO 预热失败（不影响后续使用）: %s", e)
@@ -141,6 +142,7 @@ class ShipDetector:
                 classes=self._classes,
                 verbose=False,
                 device=self._device or None,
+                fuse_score=False,
             )
         except AttributeError as e:
             # ultralytics 版本与 default.yaml 不兼容时的常见错误
