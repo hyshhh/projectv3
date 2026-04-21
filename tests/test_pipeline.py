@@ -245,7 +245,7 @@ class TestAgentInferenceHelpers:
     def test_prompt_mode_switch(self):
         config = {
             "llm": {"model": "test", "api_key": "test", "base_url": "http://localhost:1/v1", "temperature": 0},
-            "embed": {"model": "test", "api_key": "test", "base_url": "http://localhost:1/v1", "dimensions": 64},
+            "embed": {"model": "test", "api_key": "test", "base_url": "http://localhost:1/v1"},
             "retrieval": {"top_k": 3, "score_threshold": 0.5},
             "vector_store": {"persist_path": "/tmp/test_vs", "auto_rebuild": False},
             "app": {"log_level": "INFO", "ship_db_path": "/tmp/test.csv"},
@@ -258,7 +258,7 @@ class TestAgentInferenceHelpers:
     def test_prompt_mode_invalid(self):
         config = {
             "llm": {"model": "test", "api_key": "test", "base_url": "http://localhost:1/v1", "temperature": 0},
-            "embed": {"model": "test", "api_key": "test", "base_url": "http://localhost:1/v1", "dimensions": 64},
+            "embed": {"model": "test", "api_key": "test", "base_url": "http://localhost:1/v1"},
             "retrieval": {"top_k": 3, "score_threshold": 0.5},
             "vector_store": {"persist_path": "/tmp/test_vs", "auto_rebuild": False},
             "app": {"log_level": "INFO", "ship_db_path": "/tmp/test.csv"},

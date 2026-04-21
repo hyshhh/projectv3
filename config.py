@@ -22,10 +22,9 @@ _DEFAULTS: dict[str, Any] = {
         "temperature": 0.0,
     },
     "embed": {
-        "model": "text-embedding-v4",
+        "model": "Qwen3-Embedding-0.6B",
         "api_key": "",
-        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "dimensions": None,
+        "base_url": "http://localhost:7891/v1",
     },
     "retrieval": {
         "top_k": 3,
