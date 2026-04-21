@@ -288,7 +288,7 @@ class ShipDatabase:
 
         results = []
         for doc, distance in results_with_score:
-            score = 1.0 / (1.0 + distance)
+            score = float(1.0 / (1.0 + distance))
             results.append({
                 "hull_number": doc.metadata["hull_number"],
                 "description": doc.metadata["description"],
